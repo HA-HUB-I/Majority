@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Majority Radio</title>
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<style>
+  :root {
+    --bg:      #0d0d0d;
+    --surface: #161616;
+    --border:  #2a2a2a;
+    --green:   #00e676;
+    --dim:     #4a4a4a;
+    --text:    #e0e0e0;
+    --red:     #ff5252;
+    --amber:   #ffd740;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 16px;
+  }
+  h1 {
+    color: var(--green);
+    letter-spacing: 4px;
+    font-size: 18px;
+    margin-bottom: 16px;
+    text-transform: uppercase;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px;
+    width: 100%;
+    max-width: 480px;
+    margin-bottom: 10px;
+  }
+  .card-title {
+    font-size: 11px;
+    color: var(--dim);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+
+  /* Connection */
+  .connect-row {
+    display: flex;
+    gap: 6px;
+  }
+  .connect-row input {
+    flex: 1;
+    background: #111;
+    border: 1px solid var(--border);
+    color: var(--green);
+    font-family: inherit;
+    font-size: 14px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    outline: none;
+  }
+  .connect-row input:focus { border-color: var(--green); }
+  .dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--dim);
+    display: inline-block;
+    margin-right: 8px;
+    flex-shrink: 0;
+  }
+  .dot.on  { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.err { background: var(--red); }
+  #conn-status {
+    display: flex;
+    align-items: center;
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--dim);
+    min-height: 18px;
+  }
+
+  /* Now Playing */
+  #mode-label {
+    font-size: 11px;
+    letter-spacing: 3px;
+    color: var(--amber);
+    margin-bottom: 6px;
+  }
+  #station {
+    font-size: 20px;
+    color: var(--green);
+    font-weight: bold;
+    min-height: 28px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #track {
+    font-size: 13px;
+    color: var(--text);
+    min-height: 20px;
+    margin-top: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .meta-row {
+    display: flex;
+    gap: 16px;
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--dim);
+  }
+
+  /* Buttons */
+  .btn-row {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  button {
+    background: #1e1e1e;
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    padding: 8px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s, color 0.1s;
+    user-select: none;
+  }
+  button:hover  { background: #252525; border-color: #444; }
+  button:active { background: #111; transform: scale(0.97); }
+  button.accent {
+    border-color: var(--green);
+    color: var(--green);
+  }
+  button.accent:hover { background: #0a2a1a; }
+  button.danger {
+    border-color: var(--red);
+    color: var(--red);
+  }
+  button.small { padding: 6px 10px; font-size: 12px; }
+  button.wide  { flex: 1; }
+
+  /* Volume bar */
+  .vol-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  #vol-bar-bg {
+    flex: 1;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  #vol-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--green);
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+  #vol-num { font-size: 13px; color: var(--green); min-width: 28px; text-align: right; }
+
+  /* Mode buttons */
+  .mode-btn { flex: 1; text-align: center; font-size: 12px; letter-spacing: 1px; }
+  .mode-btn.active {
+    background: #0d2b1a;
+    border-color: var(--green);
+    color: var(--green);
+  }
+
+  /* Presets */
+  .preset-btn { min-width: 44px; }
+
+  /* Debug */
+  #debug-toggle {
+    background: none;
+    border: none;
+    color: var(--dim);
+    font-family: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0;
+    letter-spacing: 1px;
+  }
+  #debug-toggle:hover { color: var(--text); }
+  #debug-panel {
+    display: none;
+    margin-top: 10px;
+    background: #111;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 11px;
+    color: #888;
+    max-height: 200px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+</style>
+</head>
+<body>
+
+<h1>▶ Majority Radio</h1>
+
+<!-- Connection -->
+<div class="card">
+  <div class="card-title">Connection</div>
+  <div class="connect-row">
+    <input type="text" id="ip-input" placeholder="192.168.1.x" autocomplete="off" spellcheck="false">
+    <button class="accent" onclick="connect()">Connect</button>
+    <button onclick="scan()" title="UDP broadcast scan (may not work on all networks)">Scan</button>
+  </div>
+  <div id="conn-status"><span class="dot" id="conn-dot"></span><span id="conn-text">Not connected</span></div>
+</div>
+
+<!-- Now Playing -->
+<div class="card">
+  <div class="card-title">Now Playing</div>
+  <div id="mode-label">—</div>
+  <div id="station">—</div>
+  <div id="track">—</div>
+  <div class="meta-row">
+    <span id="bitrate">—</span>
+    <span id="volume-label">Vol: —</span>
+  </div>
+</div>
+
+<!-- Volume -->
+<div class="card">
+  <div class="card-title">Volume</div>
+  <div class="vol-wrap" style="margin-bottom:10px">
+    <div id="vol-bar-bg"><div id="vol-bar"></div></div>
+    <span id="vol-num">—</span>
+  </div>
+  <div class="btn-row">
+    <button class="wide" onclick="cmd('VolumeDown')">VOL −</button>
+    <button class="wide danger" onclick="cmd('Mute')">MUTE</button>
+    <button class="wide" onclick="cmd('VolumeUp')">VOL +</button>
+  </div>
+</div>
+
+<!-- Transport -->
+<div class="card">
+  <div class="card-title">Playback</div>
+  <div class="btn-row">
+    <button class="wide" onclick="cmd('Previous')">⏮ PREV</button>
+    <button class="wide accent" onclick="cmd('PlayPause')">⏯ PLAY/PAUSE</button>
+    <button class="wide" onclick="cmd('Next')">NEXT ⏭</button>
+  </div>
+</div>
+
+<!-- Source -->
+<div class="card">
+  <div class="card-title">Source</div>
+  <div class="btn-row">
+    <button class="mode-btn" id="mode-0" onclick="switchMode(0)">INET</button>
+    <button class="mode-btn" id="mode-2" onclick="switchMode(2)">FM</button>
+    <button class="mode-btn" id="mode-3" onclick="switchMode(3)">DAB</button>
+    <button class="mode-btn" id="mode-4" onclick="switchMode(4)">BT</button>
+    <button class="mode-btn" id="mode-5" onclick="switchMode(5)">AUX</button>
+  </div>
+</div>
+
+<!-- Presets -->
+<div class="card">
+  <div class="card-title">Presets</div>
+  <div class="btn-row">
+    <button class="preset-btn" onclick="preset(1)">1</button>
+    <button class="preset-btn" onclick="preset(2)">2</button>
+    <button class="preset-btn" onclick="preset(3)">3</button>
+    <button class="preset-btn" onclick="preset(4)">4</button>
+    <button class="preset-btn" onclick="preset(5)">5</button>
+    <button class="preset-btn" onclick="preset(6)">6</button>
+    <button class="preset-btn" onclick="preset(7)">7</button>
+    <button class="preset-btn" onclick="preset(8)">8</button>
+  </div>
+</div>
+
+<!-- Debug -->
+<div class="card">
+  <button id="debug-toggle" onclick="toggleDebug()">▶ RAW DEBUG</button>
+  <div id="debug-panel"></div>
+</div>
+
+<script>
+  const socket = io();
+  let debugOpen = false;
+  let maxVol = 32; // adjust if radio uses different scale
+
+  // ── Socket events ──────────────────────────────────────────────────────────
+  socket.on('status', updateUI);
+  socket.on('disconnected', () => setConnState(false, 'Connection lost'));
+
+  // ── UI Update ──────────────────────────────────────────────────────────────
+  function updateUI(s) {
+    // Now Playing fields — try common Magic M6/M7 field names
+    setText('mode-label',    modeLabel(s.Mode || s.mode || ''));
+    setText('station',       s.StationName || s.station_name || s.Name || '—');
+    setText('track',         s.SongTitle || s.song_title || s.Track || '—');
+    setText('bitrate',       s.Bitrate ? s.Bitrate + ' kbps' : '—');
+
+    const vol = parseInt(s.Volume || s.volume || 0, 10);
+    setText('vol-num',       isNaN(vol) ? '—' : vol);
+    setText('volume-label',  isNaN(vol) ? 'Vol: —' : 'Vol: ' + vol);
+    document.getElementById('vol-bar').style.width =
+      isNaN(vol) ? '0%' : Math.min(100, (vol / maxVol) * 100) + '%';
+
+    // Highlight active mode button
+    const modeNum = parseInt(s.Mode || s.mode || -1, 10);
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    const activeBtn = document.getElementById('mode-' + modeNum);
+    if (activeBtn) activeBtn.classList.add('active');
+
+    // Debug
+    if (s._raw) log('STATUS:\n' + prettyXml(s._raw));
+  }
+
+  function modeLabel(m) {
+    const map = { '0': 'INTERNET RADIO', '1': 'STREAMING', '2': 'FM', '3': 'DAB+', '4': 'BLUETOOTH', '5': 'AUX' };
+    return map[String(m)] || (m ? 'MODE ' + m : '—');
+  }
+
+  // ── API Calls ──────────────────────────────────────────────────────────────
+  async function connect() {
+    const ip = document.getElementById('ip-input').value.trim();
+    if (!ip) return;
+    setConnState(false, 'Connecting…');
+    try {
+      const r = await post('/api/connect', { ip });
+      if (r.ok) {
+        setConnState(true, 'Connected to ' + ip);
+        updateUI(r.status);
+      } else {
+        setConnState(false, r.error || 'Failed');
+      }
+    } catch(e) { setConnState(false, 'Error: ' + e.message); }
+  }
+
+  async function scan() {
+    log('Scanning via UDP…');
+    try {
+      const r = await post('/api/scan', {});
+      if (r.found && r.found.length) {
+        log('Found: ' + r.found.join(', '));
+        document.getElementById('ip-input').value = r.found[0];
+      } else {
+        log('No devices found via UDP (network may block broadcast)');
+      }
+    } catch(e) { log('Scan error: ' + e.message); }
+  }
+
+  async function cmd(command, extras = {}) {
+    try {
+      const r = await post('/api/command', { command, ...extras });
+      if (r.raw) log('CMD ' + command + ' → ' + prettyXml(r.raw));
+      else if (r.error) log('ERROR: ' + r.error);
+    } catch(e) { log('Error: ' + e.message); }
+  }
+
+  function switchMode(n) { cmd('SwitchMode', { Mode: n }); }
+  function preset(n)      { cmd('PlayFavorite', { Index: n }); }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  async function post(url, body) {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return r.json();
+  }
+
+  function setConnState(connected, text) {
+    document.getElementById('conn-dot').className = 'dot' + (connected ? ' on' : ' err');
+    document.getElementById('conn-text').textContent = text;
+    if (!connected) {
+      ['station','track','mode-label','bitrate','vol-num','volume-label']
+        .forEach(id => setText(id, '—'));
+      document.getElementById('vol-bar').style.width = '0%';
+    }
+  }
+
+  function setText(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+  }
+
+  function prettyXml(xml) {
+    return xml.replace(/></g, '>\n<').replace(/^\s+|\s+$/g, '');
+  }
+
+  function log(msg) {
+    const p = document.getElementById('debug-panel');
+    p.textContent += '\n' + msg;
+    p.scrollTop = p.scrollHeight;
+  }
+
+  function toggleDebug() {
+    debugOpen = !debugOpen;
+    document.getElementById('debug-panel').style.display = debugOpen ? 'block' : 'none';
+    document.getElementById('debug-toggle').textContent = (debugOpen ? '▼' : '▶') + ' RAW DEBUG';
+  }
+
+  // ── Enter key on IP input ──────────────────────────────────────────────────
+  document.getElementById('ip-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') connect();
+  });
+</script>
+</body>
+</html>
