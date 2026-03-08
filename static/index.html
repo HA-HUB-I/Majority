@@ -543,6 +543,16 @@
   // ── Socket events ──────────────────────────────────────────────────────────
   socket.on('status', updateUI);
   socket.on('disconnected', () => setConnState(false, 'Connection lost'));
+  socket.on('radio_health', h => {
+    const dot = document.getElementById('conn-dot');
+    if (h.ok) {
+      if (dot) dot.className = 'dot on';
+    } else {
+      if (dot) dot.className = 'dot err';
+      toast(`⚠ ${h.msg || 'Radio overloaded'}`, 'warn', (h.backoff || 15) * 1000);
+      log(`[Circuit breaker] ${h.msg || 'Radio not responding'}`);
+    }
+  });
 
   // ── UI Update ──────────────────────────────────────────────────────────────
   function updateUI(s) {
