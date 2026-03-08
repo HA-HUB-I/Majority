@@ -36,7 +36,8 @@ state = {
     "last_status": {},
     "hotkeys": [],           # cached preset list: [{"id": "75_256", "name": "BG Radio"}, ...]
     "cur_play_name": "",     # current station name from /init
-    "cur_play_menu_id": "",  # current menu id from /init
+    "cur_play_menu_id": "",  # current menu id from /init (used as root for station browser)
+    "browse_stack": [],      # navigation stack for station browser: list of {"id", "title"}
 }
 
 # Maps UI command names → (REST path, extra query params)
@@ -94,6 +95,17 @@ def _radio_reachable(ip: str) -> bool:
         return False
 
 
+def _emit_status():
+    """Broadcast the current tracked state to all connected WebSocket clients."""
+    socketio.emit("status", state["last_status"])
+
+
+def _merge_status(**fields):
+    """Update last_status with given fields and emit via WebSocket."""
+    state["last_status"].update(fields)
+    _emit_status()
+
+
 # ── Hotkey / Preset cache ──────────────────────────────────────────────────────
 
 def _refresh_hotkeys():
@@ -127,7 +139,7 @@ def status_poller():
         if state["connected"] and state["ip"]:
             now = time.time()
 
-            # Periodically refresh /init to keep station name up to date
+            # Periodically refresh /init to keep station name + mode up to date
             if now - last_init_time >= INIT_REFRESH_INTERVAL:
                 init_resp = get_from_radio("init", language="en")
                 if init_resp:
@@ -135,17 +147,26 @@ def status_poller():
                     if info.get("rt") != "NO_SUPPORT":
                         state["cur_play_name"] = info.get("cur_play_name", state["cur_play_name"])
                         state["cur_play_menu_id"] = info.get("cur_play_menu_id", state["cur_play_menu_id"])
+                        # PlayMode from /init maps to source mode (0=INET, 1=also INET on some fw, 2=FM, etc.)
+                        play_mode = info.get("PlayMode", "")
+                        if play_mode:
+                            state["last_status"].setdefault("Mode", play_mode)
                 last_init_time = now
 
             resp = get_from_radio("playinfo")
             if resp:
                 status = parse_xml(resp)
-                if status.get("rt") != "NO_SUPPORT":
+                if status.get("rt") == "NO_SUPPORT":
+                    # /playinfo not supported — emit our manually tracked state so the UI stays current
+                    if state["last_status"]:
+                        state["last_status"]["cur_play_name"] = state["cur_play_name"]
+                        _emit_status()
+                else:
                     # Inject station name from cached /init data
                     status["cur_play_name"] = state["cur_play_name"]
                     status["cur_play_menu_id"] = state["cur_play_menu_id"]
-                    state["last_status"] = status
-                    socketio.emit("status", status)
+                    state["last_status"].update(status)
+                    _emit_status()
             else:
                 if not _radio_reachable(state["ip"]):
                     state["connected"] = False
@@ -185,7 +206,7 @@ def api_connect():
     state["cur_play_menu_id"] = device_info.get("cur_play_menu_id", "")
     log.info("Connected to radio at %s — firmware %s", ip, device_info.get("version", "?"))
 
-    # Seed the status with a real /playinfo call
+    # Seed the status with a real /playinfo call (may return NO_SUPPORT on some firmware)
     status_resp = get_from_radio("playinfo")
     status = {}
     if status_resp:
@@ -195,6 +216,23 @@ def api_connect():
         else:
             status["cur_play_name"] = state["cur_play_name"]
             status["cur_play_menu_id"] = state["cur_play_menu_id"]
+
+    # If /playinfo didn't give us vol, try /getvol (read-only on some firmware)
+    if "vol" not in status:
+        getvol_resp = get_from_radio("getvol")
+        if getvol_resp:
+            getvol = parse_xml(getvol_resp)
+            if "vol" in getvol:
+                status["vol"] = getvol["vol"]
+                status["mute"] = getvol.get("mute", "0")
+
+    # Inject PlayMode from /init as the initial source mode
+    play_mode = device_info.get("PlayMode", "")
+    if play_mode and "Mode" not in status:
+        status["Mode"] = play_mode
+
+    status["cur_play_name"] = state["cur_play_name"]
+    status["cur_play_menu_id"] = state["cur_play_menu_id"]
     state["last_status"] = status
 
     # Cache preset list in background so it's ready for preset buttons
@@ -255,9 +293,12 @@ def api_command():
         resp = get_from_radio("setvol", vol=new_vol, mute=0)
         if resp is None:
             return jsonify(error="No response from radio"), 502
-        log.info("VolumeUp %d → %d", cur_vol, new_vol)
-        state["last_status"]["vol"] = str(new_vol)
-        return jsonify(ok=True, raw=resp)
+        # Parse confirmed vol/mute from radio response and emit to UI immediately
+        confirmed = parse_xml(resp)
+        actual_vol = confirmed.get("vol", str(new_vol))
+        log.info("VolumeUp %d → %d", cur_vol, int(actual_vol))
+        _merge_status(vol=actual_vol, mute="0")
+        return jsonify(ok=True, vol=actual_vol, mute=0, raw=resp)
 
     # ── VolumeDown ────────────────────────────────────────────────────────────
     if command == "VolumeDown":
@@ -266,9 +307,11 @@ def api_command():
         resp = get_from_radio("setvol", vol=new_vol, mute=0)
         if resp is None:
             return jsonify(error="No response from radio"), 502
-        log.info("VolumeDown %d → %d", cur_vol, new_vol)
-        state["last_status"]["vol"] = str(new_vol)
-        return jsonify(ok=True, raw=resp)
+        confirmed = parse_xml(resp)
+        actual_vol = confirmed.get("vol", str(new_vol))
+        log.info("VolumeDown %d → %d", cur_vol, int(actual_vol))
+        _merge_status(vol=actual_vol, mute="0")
+        return jsonify(ok=True, vol=actual_vol, mute=0, raw=resp)
 
     # ── Mute (toggle) ─────────────────────────────────────────────────────────
     if command == "Mute":
@@ -278,9 +321,11 @@ def api_command():
         resp = get_from_radio("setvol", vol=cur_vol, mute=new_mute)
         if resp is None:
             return jsonify(error="No response from radio"), 502
-        log.info("Mute toggle → mute=%d", new_mute)
-        state["last_status"]["mute"] = str(new_mute)
-        return jsonify(ok=True, raw=resp)
+        confirmed = parse_xml(resp)
+        actual_mute = confirmed.get("mute", str(new_mute))
+        log.info("Mute toggle → mute=%s", actual_mute)
+        _merge_status(mute=actual_mute)
+        return jsonify(ok=True, mute=actual_mute, raw=resp)
 
     # ── SwitchMode ────────────────────────────────────────────────────────────
     if command == "SwitchMode":
@@ -289,6 +334,8 @@ def api_command():
         if resp is None:
             return jsonify(error="No response from radio"), 502
         log.info("SwitchMode → mode=%s", mode)
+        # Update mode in tracked state and emit regardless of radio response validity
+        _merge_status(Mode=str(mode))
         return jsonify(ok=True, raw=resp)
 
     # ── PlayFavorite (hotkey by 1-based index) ────────────────────────────────
@@ -307,7 +354,25 @@ def api_command():
         if resp is None:
             return jsonify(error="No response from radio"), 502
         log.info("PlayFavorite #%d → %s (%s)", index, entry["name"], entry["id"])
+        # Update station name in tracked state
+        state["cur_play_name"] = entry["name"]
+        _merge_status(cur_play_name=entry["name"])
         return jsonify(ok=True, raw=resp, name=entry["name"])
+
+    # ── PlayStation (play by raw menu id, e.g. "87_3") ───────────────────────
+    if command == "PlayStation":
+        stn_id = data.get("id", "")
+        name   = data.get("name", "")
+        if not stn_id:
+            return jsonify(error="id required"), 400
+        resp = get_from_radio("play_stn", id=stn_id)
+        if resp is None:
+            return jsonify(error="No response from radio"), 502
+        log.info("PlayStation → %s (%s)", name, stn_id)
+        if name:
+            state["cur_play_name"] = name
+            _merge_status(cur_play_name=name)
+        return jsonify(ok=True, raw=resp, name=name)
 
     # ── Generic mapped commands ───────────────────────────────────────────────
     if command in COMMAND_MAP:
@@ -336,6 +401,78 @@ def api_status():
 def api_hotkeys():
     """Return the cached hotkey/preset list."""
     return jsonify(state["hotkeys"])
+
+
+@app.route("/api/browse")
+def api_browse():
+    """Browse a radio menu category. Pass ?id=XX to list items at that menu node.
+    Returns list of items with {id, name, type} where type is 'file' (playable) or 'dir' (folder).
+    If no id given, tries cur_play_menu_id then falls back to id=0."""
+    if not state["ip"]:
+        return jsonify(error="Not connected"), 409
+    menu_id = request.args.get("id", "").strip()
+    if not menu_id:
+        menu_id = state["cur_play_menu_id"] or "0"
+    start = int(request.args.get("start", 1))
+    count = int(request.args.get("count", 250))
+    xml_text = get_from_radio("list", id=menu_id, start=start, count=count)
+    if not xml_text:
+        return jsonify(error="No response from radio"), 502
+    try:
+        root = ET.fromstring(xml_text)
+        items = []
+        for item in root.findall("item"):
+            id_el     = item.find("id")
+            name_el   = item.find("name")
+            status_el = item.find("status")
+            if id_el is not None:
+                items.append({
+                    "id":   (id_el.text or "").strip(),
+                    "name": (name_el.text or "").strip() if name_el is not None else "",
+                    "type": (status_el.text or "file").strip() if status_el is not None else "file",
+                })
+        total = root.findtext("item_total", default="0")
+        return jsonify(id=menu_id, total=int(total), items=items)
+    except ET.ParseError as e:
+        log.warning("Browse parse error for id=%s: %s", menu_id, e)
+        return jsonify(error="XML parse error", raw=xml_text), 500
+
+
+@app.route("/api/navigate", methods=["POST"])
+def api_navigate():
+    """Navigate into a sub-menu (gochild) then list it.
+    POST body: {"id": "87_2"}  → calls /gochild?id=87_2 then /list?id=87_2"""
+    if not state["ip"]:
+        return jsonify(error="Not connected"), 409
+    data = request.get_json(force=True)
+    menu_id = (data.get("id") or "").strip()
+    if not menu_id:
+        return jsonify(error="id required"), 400
+    nav_resp = get_from_radio("gochild", id=menu_id)
+    if nav_resp is None:
+        return jsonify(error="No response from radio on gochild"), 502
+    # Now list the items at that node
+    xml_text = get_from_radio("list", id=menu_id, start=1, count=250)
+    if not xml_text:
+        return jsonify(error="No response from radio on list"), 502
+    try:
+        root = ET.fromstring(xml_text)
+        items = []
+        for item in root.findall("item"):
+            id_el     = item.find("id")
+            name_el   = item.find("name")
+            status_el = item.find("status")
+            if id_el is not None:
+                items.append({
+                    "id":   (id_el.text or "").strip(),
+                    "name": (name_el.text or "").strip() if name_el is not None else "",
+                    "type": (status_el.text or "file").strip() if status_el is not None else "file",
+                })
+        total = root.findtext("item_total", default="0")
+        return jsonify(id=menu_id, total=int(total), items=items)
+    except ET.ParseError as e:
+        log.warning("Navigate parse error for id=%s: %s", menu_id, e)
+        return jsonify(error="XML parse error", raw=xml_text), 500
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────

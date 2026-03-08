@@ -1,0 +1,15 @@
+GET /list?id=87&start=1&count=250 HTTP/1.1
+Authorization: Basic c3UzZzRnbzZzazc6amkzOTQ1NHh1L14=
+User-Agent: Dalvik/2.1.0 (Linux; U; Android 16; 2412DPC0AG Build/BP2A.250605.031.A3)
+Host: 192.168.11.16
+Connection: Keep-Alive
+Accept-Encoding: gzip
+
+
+
+HTTP/1.1 200 OK
+Server: magic iradio
+Content-Type: text/xml
+Content-Length: 842
+
+<?xml version="1.0" encoding="UTF-8"?><menu><item_total>10</item_total><item_return>10</item_return><item><id>87_1</id><status>file</status><name>Radio 1</name></item><item><id>87_2</id><status>file</status><name>BG Radio</name></item><item><id>87_3</id><status>file</status><name>Radio Veronika</name></item><item><id>87_4</id><status>file</status><name>Radio ENERGY Bulgaria</name></item><item><id>87_5</id><status>file</status><name>Radio 1 Rock</name></item><item><id>87_6</id><status>file</status><name>bTV Radio</name></item><item><id>87_7</id><status>file</status><name>Radio City</name></item><item><id>87_8</id><status>file</status><name>DJ ZONE HOUSE RADIO</name></item><item><id>87_9</id><status>file</status><name>Radio Hot Dance</name></item><item><id>87_10</id><status>file</status><name>Folk Radio Nazdrave</name></item></menu>

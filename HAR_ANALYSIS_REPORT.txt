@@ -1,0 +1,256 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║     MAJORITY PEMBROKE RADIO - HAR ANALYSIS & BUG DIAGNOSIS REPORT         ║
+║                    Device: 192.168.11.16 (Magic iRadio)                   ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+NETWORK CAPTURE SUMMARY
+═════════════════════════════════════════════════════════════════════════════
+
+File: 192.168.11.16_2026_03_08_16_06_24.har
+Entries Captured: 50
+Time Span: ~40 seconds of UI interaction
+Client: AirMusic Android app
+
+Unique API Endpoints Found:
+  1. /playinfo    (23 calls) - Status polling
+  2. /setvol      (3 calls)  - Volume control
+  3. /list        (7 calls)  - Station browsing
+  4. /gochild     (8 calls)  - Menu navigation
+  5. /play_stn    (2 calls)  - Play station
+  6. /play_url    (2 calls)  - Get stream URL
+  7. /setfav      (1 call)   - Set favorite
+  8. /back_stop   (1 call)   - Device info
+  9. /playlogo.jpg (2 calls) - Image asset
+  10.CONNECT     (1 call)    - DNS-over-TLS probe
+
+
+ENDPOINTS WITH CAPTURED RESPONSE CONTENT
+═════════════════════════════════════════════════════════════════════════════
+
+✓ /setvol?vol=8&mute=0
+  Response: <?xml version="1.0" encoding="UTF-8"?><result><vol>8</vol><mute>0</mute></result>
+  Fields: vol (Integer), mute (Integer: 0|1)
+
+✓ /setvol?vol=7&mute=0
+  Response: <?xml version="1.0" encoding="UTF-8"?><result><vol>7</vol><mute>0</mute></result>
+  Note: Volume adjusted down by user
+
+✓ /back_stop
+  Response: Device info including version j32720190327h, firmware features
+  Fields: id, version, lang, wifi_set_url, ptver, hotkey_fav, features...
+
+✓ /list?id=87&start=1&count=250
+  Response: 10 Bulgarian radio stations with proper IDs and names
+  Fields: item_total, item_return, item[].id, item[].status, item[].name
+  Stations: Radio 1, BG Radio, Radio Veronika, etc.
+
+✓ /play_url?id=87_3
+  Response: <?xml version="1.0" encoding="UTF-8"?><result><url>...</url></result>
+  URL: http://b1.mediayou.net/embedded/playURL.php?id=7632&sc=N9XX_AAC
+
+✓ /setfav?id=87&item=3&favpos=4
+  Response: <?xml version="1.0" encoding="UTF-8"?><result>FAIL</result>
+  Reason: Probably already set at that position
+
+
+ENDPOINTS WITH EMPTY RESPONSES (NOT CAPTURED)
+═════════════════════════════════════════════════════════════════════════════
+
+✗ /playinfo (23 calls)
+  Status: All show HTTP 0 (not captured)
+  Expected fields: vol, mute, status, stream_format, Mode, cur_play_name
+  ⚠️ CRITICAL: This endpoint is polled every 2 seconds - its response is vital
+
+✗ /init (Not in capture, but referenced in code)
+  Expected fields: cur_play_name, cur_play_menu_id, version, rt
+  ⚠️ CRITICAL: Station name depends on this
+
+✗ /hotkeylist (Not in capture, referenced in code)
+  Expected fields: item[].id, item[].name
+  ⚠️ CRITICAL: Preset button labels depend on this
+
+
+FIELD MAPPING FOR BUG DIAGNOSIS
+═════════════════════════════════════════════════════════════════════════════
+
+VOLUME STATUS BUG:
+  • XML Field: <vol>N</vol> where N is 0-20
+  • From: /playinfo endpoint
+  • In Frontend: #vol-num, #vol-bar, #volume-label
+  • Parse Code: parseInt(s.vol || s.Volume || s.volume || 0, 10)
+  • Bug Symptom: Shows "—" instead of number
+  • Root Cause: /playinfo missing <vol> or returning empty
+
+MUTE STATUS BUG:
+  • XML Field: <mute>0</mute> or <mute>1</mute>
+  • From: /playinfo endpoint
+  • In Frontend: .danger button opacity (1 when muted, 0.6 when not)
+  • Parse Code: const isMuted = s.mute === '1' || s.mute === 1;
+  • Bug Symptom: Button opacity never changes
+  • Root Cause: /playinfo missing <mute> or returning empty
+
+STATION NAME BUG:
+  • XML Field: <cur_play_name>Station Name</cur_play_name>
+  • From: /init endpoint (injected into /playinfo by server)
+  • In Frontend: #station element
+  • Parse Code: s.cur_play_name || s.StationName || s.station_name || s.Name || '—'
+  • Bug Symptom: Shows "—" or fallback name
+  • Root Cause: /init not called, not returning cur_play_name, or not injected
+
+PRESET NAMES BUG:
+  • XML Field: item[].name (from /hotkeylist or /list)
+  • From: /hotkeylist endpoint (cached on connection)
+  • In Frontend: .preset-btn labels
+  • Parse Code: hk.name ? hk.name.substring(0, 8) : (i + 1)
+  • Bug Symptom: Shows "1", "2", "3" instead of station names
+  • Root Cause: /hotkeylist missing, wrong structure, or async load race
+
+MODE BUTTONS BUG:
+  • XML Field: <Mode>N</Mode> where N is 0|2|3|4|5
+  • From: /playinfo endpoint
+  • In Frontend: .mode-btn highlighting (INET, FM, DAB, BT, AUX)
+  • Parse Code: const modeNum = s.Mode || s.mode;
+  •            document.getElementById('mode-' + modeNum).classList.add('active')
+  • Bug Symptom: No buttons ever highlight as active
+  • Root Cause: /playinfo missing <Mode>, returned as different field name, or mode value undefined
+
+
+SPECIFIC RECOMMENDATIONS FOR FIXES
+═════════════════════════════════════════════════════════════════════════════
+
+1. ADD DEBUG LOGGING TO server.py
+   ─────────────────────────────────────────────────────────────────────────
+   In parse_xml() function:
+      log.debug("Parsed XML fields: %s", ', '.join(result.keys()))
+      log.debug("Full parsed result: %s", result)
+   
+   In status_poller():
+      log.debug("playinfo response: %s", status)
+      log.debug("cur_play_name in state: %s", state["cur_play_name"])
+   
+   Then check server logs for actual field values
+
+
+2. ADD DEBUG LOGGING TO index.html
+   ─────────────────────────────────────────────────────────────────────────
+   In updateUI() function:
+      console.log("Raw status object:", s);
+      console.log("vol=%s type=%s, mute=%s type=%s, Mode=%s type=%s, cur_play_name=%s",
+                  s.vol, typeof s.vol, s.mute, typeof s.mute, s.Mode, typeof s.Mode, 
+                  s.cur_play_name);
+   
+   Then check browser console for actual values
+
+
+3. TEST ENDPOINTS MANUALLY WITH CURL
+   ─────────────────────────────────────────────────────────────────────────
+   Replace 192.168.11.16 with your device IP:
+   
+   curl -u su3g4go6sk7:ji39454xu/^ http://192.168.11.16/playinfo | xmllint --format -
+   curl -u su3g4go6sk7:ji39454xu/^ 'http://192.168.11.16/init?language=en' | xmllint --format -
+   curl -u su3g4go6sk7:ji39454xu/^ http://192.168.11.16/hotkeylist | xmllint --format -
+   
+   This shows you EXACTLY what fields the device returns
+
+
+4. CHECK FOR TYPOS IN FIELD NAMES
+   ─────────────────────────────────────────────────────────────────────────
+   Frontend expects:  <Mode>  (capital M)
+   Device returns:    <mode>  (lowercase m)?
+   
+   Frontend expects:  <vol>   <mute>
+   Device returns:    <volume> <isMuted>?
+   
+   Use the manual curl test (step 3) to verify actual field names
+
+
+5. FIX ASYNC RACE CONDITION
+   ─────────────────────────────────────────────────────────────────────────
+   In api_connect() (line 201), change:
+   
+   FROM:
+      threading.Thread(target=_refresh_hotkeys, daemon=True).start()
+      return jsonify(ok=True, status=status, device=device_info)
+   
+   TO:
+      hotkey_thread = threading.Thread(target=_refresh_hotkeys, daemon=True)
+      hotkey_thread.start()
+      hotkey_thread.join(timeout=5)  # Wait up to 5 seconds
+      log.info("Hotkeys loaded: %d presets", len(state["hotkeys"]))
+      return jsonify(ok=True, status=status, device=device_info)
+   
+   This ensures hotkeys are cached before returning to frontend
+
+
+6. ADD RETRY LOGIC TO FRONTEND HOTKEYS LOADING
+   ─────────────────────────────────────────────────────────────────────────
+   In index.html loadHotkeys() function:
+   
+   async function loadHotkeys(retries = 3) {
+     for (let i = 0; i < retries; i++) {
+       try {
+         const r = await fetch('/api/hotkeys');
+         const hotkeys = await r.json();
+         if (hotkeys && hotkeys.length > 0) {
+           // populate buttons
+           return;
+         }
+       } catch(e) {}
+       await new Promise(r => setTimeout(r, 500)); // Wait 500ms between retries
+     }
+     log('Failed to load hotkeys after ' + retries + ' attempts');
+   }
+
+
+KEY OBSERVATIONS FOR BUG FIXES
+═════════════════════════════════════════════════════════════════════════════
+
+1. Device is responding correctly
+   ✓ All captured endpoints return proper HTTP 200
+   ✓ XML structure is valid
+   ✓ Field names in /list match code expectations (id, name, status)
+   ✓ /setvol confirms volume control works on device side
+
+2. Issue is likely in /playinfo or /init responses
+   ✗ HAR shows /playinfo called 23 times with 0-byte responses
+   ✗ HAR shows /init never called (or captured)
+   ✗ HAR shows /hotkeylist never called (or captured)
+   
+   This is capture issue OR these endpoints are failing
+
+3. Code assumptions that may not match device
+   • Field name case sensitivity (Mode vs mode)
+   • Field names may be different (stream_format vs Bitrate)
+   • Device may not support /init (might return rt=NO_SUPPORT)
+   • Device may use /list instead of /hotkeylist
+
+4. Frontend fallback logic is working
+   • Code has multiple field name options for each value
+   • If "—" is displayed, it means ALL fallbacks were empty/null
+   • This is expected if endpoint isn't responding or field is missing
+
+
+TESTING STRATEGY
+═════════════════════════════════════════════════════════════════════════════
+
+1. Connect device to development PC via network
+2. Open browser DevTools (F12) → Network tab
+3. Filter for XHR requests
+4. In UI, click buttons and watch /api/status WebSocket messages
+5. Look for: Do WebSocket messages contain vol, mute, Mode fields?
+6. If not, follow manual curl testing from recommendation #3
+
+If WebSocket status messages contain the fields:
+   → Problem is in frontend parsing/display
+   → Focus on index.html updateUI() logic
+
+If WebSocket status messages DON'T contain the fields:
+   → Problem is in backend /playinfo parsing/injection
+   → Focus on server.py lines 140-148
+
+If /api/status request fails:
+   → Problem is in initial connection
+   → Focus on server.py api_connect() (line 174)
+
+
+═════════════════════════════════════════════════════════════════════════════

@@ -1,3 +1,12 @@
+GET /back_stop HTTP/1.1
+Authorization: Basic c3UzZzRnbzZzazc6amkzOTQ1NHh1L14=
+User-Agent: Dalvik/2.1.0 (Linux; U; Android 16; 2412DPC0AG Build/BP2A.250605.031.A3)
+Host: 192.168.11.16
+Connection: Keep-Alive
+Accept-Encoding: gzip
+
+
+
 HTTP/1.1 200 OK
 Server: magic iradio
 Content-Type: text/xml

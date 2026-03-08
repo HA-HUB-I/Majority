@@ -186,6 +186,49 @@
   /* Presets */
   .preset-btn { min-width: 44px; }
 
+  /* Station browser */
+  #browser-panel {
+    display: none;
+    margin-top: 10px;
+  }
+  .browser-nav {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  #browser-path {
+    flex: 1;
+    font-size: 11px;
+    color: var(--dim);
+    letter-spacing: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  #station-list {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  .stn-item {
+    display: flex;
+    align-items: center;
+    padding: 7px 10px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    gap: 8px;
+    transition: background 0.1s;
+  }
+  .stn-item:last-child { border-bottom: none; }
+  .stn-item:hover { background: #1e1e1e; }
+  .stn-item.playing { color: var(--green); }
+  .stn-icon { font-size: 10px; color: var(--dim); flex-shrink: 0; }
+  .stn-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .stn-play { font-size: 11px; color: var(--dim); flex-shrink: 0; }
+  #browser-loading { text-align: center; padding: 20px; color: var(--dim); font-size: 12px; }
+
   /* Debug */
   #debug-toggle {
     background: none;
@@ -277,6 +320,24 @@
   </div>
 </div>
 
+<!-- Station Browser -->
+<div class="card">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+    <div class="card-title" style="margin-bottom:0">Stations</div>
+    <button class="small" onclick="toggleBrowser()">▶ Browse</button>
+  </div>
+  <div id="browser-panel">
+    <div class="browser-nav">
+      <button class="small" id="btn-back" onclick="browserBack()" style="display:none">← Back</button>
+      <span id="browser-path">—</span>
+      <button class="small" onclick="browserLoad()">↺ Refresh</button>
+    </div>
+    <div id="station-list">
+      <div id="browser-loading">Press Refresh to load stations</div>
+    </div>
+  </div>
+</div>
+
 <!-- Presets -->
 <div class="card">
   <div class="card-title">Presets</div>
@@ -301,7 +362,12 @@
 <script>
   const socket = io();
   let debugOpen = false;
-  let maxVol = 20; // /setvol uses 0-20 range
+  let browserOpen = false;
+  let maxVol = 20;
+
+  // Browser navigation state
+  let browserStack = [];   // [{id, title}, ...]
+  let currentPlayingId = '';
 
   // ── Socket events ──────────────────────────────────────────────────────────
   socket.on('status', updateUI);
@@ -309,50 +375,57 @@
 
   // ── UI Update ──────────────────────────────────────────────────────────────
   function updateUI(s) {
-    // Station name — from /init (injected as cur_play_name) or legacy field names
+    // Station name — from cur_play_name (injected) or legacy field names
     setText('station', s.cur_play_name || s.StationName || s.station_name || s.Name || '—');
 
-    // Playback status — /playinfo returns e.g. "Playing ", "Buffering 25%"
+    // Playback status
     const playStatus = (s.status || s.SongTitle || s.song_title || s.Track || '').trim();
     setText('track', playStatus || '—');
 
-    // Mode label — derive from stream info or legacy Mode field
-    const modeNum = s.Mode || s.mode;
-    if (modeNum !== undefined && modeNum !== '') {
+    // Mode label
+    const modeNum = s.Mode !== undefined ? String(s.Mode) : (s.mode !== undefined ? String(s.mode) : '');
+    if (modeNum !== '') {
       setText('mode-label', modeLabel(modeNum));
     } else {
-      // For /playinfo, show a generic label based on what's playing
       const streamFmt = s.stream_format || '';
       setText('mode-label', streamFmt ? 'INTERNET RADIO' : (s.cur_play_name ? 'INTERNET RADIO' : '—'));
     }
 
-    // Bitrate — /playinfo gives stream_format, legacy gives Bitrate
+    // Bitrate
     setText('bitrate', s.stream_format || (s.Bitrate ? s.Bitrate + ' kbps' : '—'));
 
-    // Volume — /playinfo uses 'vol', legacy used 'Volume'/'volume'
-    const vol = parseInt(s.vol || s.Volume || s.volume || 0, 10);
-    setText('vol-num',      isNaN(vol) ? '—' : vol);
-    setText('volume-label', isNaN(vol) ? 'Vol: —' : 'Vol: ' + vol);
-    document.getElementById('vol-bar').style.width =
-      isNaN(vol) ? '0%' : Math.min(100, (vol / maxVol) * 100) + '%';
+    // Volume
+    const volRaw = s.vol !== undefined ? s.vol : (s.Volume !== undefined ? s.Volume : s.volume);
+    const vol = parseInt(volRaw, 10);
+    if (!isNaN(vol)) {
+      setText('vol-num', vol);
+      setText('volume-label', 'Vol: ' + vol);
+      document.getElementById('vol-bar').style.width = Math.min(100, (vol / maxVol) * 100) + '%';
+    } else {
+      setText('vol-num', '—');
+      setText('volume-label', 'Vol: —');
+    }
 
-    // Mute indicator on the MUTE button
+    // Mute indicator
     const isMuted = s.mute === '1' || s.mute === 1;
     const muteBtn = document.querySelector('button.danger');
-    if (muteBtn) muteBtn.style.opacity = isMuted ? '1' : '0.6';
+    if (muteBtn) {
+      muteBtn.style.opacity = isMuted ? '1' : '0.6';
+      muteBtn.style.borderColor = isMuted ? 'var(--red)' : '';
+    }
 
-    // Highlight active mode button (legacy Mode field only)
-    const modeIdx = parseInt(modeNum, 10);
+    // Highlight active mode button
     document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-    const activeBtn = document.getElementById('mode-' + modeIdx);
-    if (activeBtn) activeBtn.classList.add('active');
+    if (modeNum !== '') {
+      const activeBtn = document.getElementById('mode-' + modeNum);
+      if (activeBtn) activeBtn.classList.add('active');
+    }
 
-    // Debug
     if (s._raw) log('STATUS:\n' + prettyXml(s._raw));
   }
 
   function modeLabel(m) {
-    const map = { '0': 'INTERNET RADIO', '1': 'STREAMING', '2': 'FM', '3': 'DAB+', '4': 'BLUETOOTH', '5': 'AUX' };
+    const map = { '0': 'INTERNET RADIO', '1': 'INTERNET RADIO', '2': 'FM', '3': 'DAB+', '4': 'BLUETOOTH', '5': 'AUX' };
     return map[String(m)] || (m ? 'MODE ' + m : '—');
   }
 
@@ -365,7 +438,7 @@
       const r = await post('/api/connect', { ip });
       if (r.ok) {
         setConnState(true, 'Connected to ' + ip);
-        updateUI(r.status);
+        if (r.status && Object.keys(r.status).length) updateUI(r.status);
         loadHotkeys();
       } else {
         setConnState(false, r.error || 'Failed');
@@ -415,6 +488,104 @@
   function switchMode(n) { cmd('SwitchMode', { Mode: n }); }
   function preset(n)      { cmd('PlayFavorite', { Index: n }); }
 
+  // ── Station Browser ────────────────────────────────────────────────────────
+  function toggleBrowser() {
+    browserOpen = !browserOpen;
+    const panel = document.getElementById('browser-panel');
+    panel.style.display = browserOpen ? 'block' : 'none';
+    document.querySelector('[onclick="toggleBrowser()"]').textContent = (browserOpen ? '▼' : '▶') + ' Browse';
+    if (browserOpen && document.getElementById('browser-loading').textContent === 'Press Refresh to load stations') {
+      browserLoad();
+    }
+  }
+
+  async function browserLoad(id) {
+    const listEl = document.getElementById('station-list');
+    listEl.innerHTML = '<div id="browser-loading">Loading…</div>';
+    try {
+      const url = id ? `/api/browse?id=${encodeURIComponent(id)}` : '/api/browse';
+      const r = await fetch(url);
+      const data = await r.json();
+      if (data.error) { listEl.innerHTML = `<div id="browser-loading">Error: ${data.error}</div>`; return; }
+      renderBrowserItems(data);
+      updateBrowserNav(data.id, data.total);
+    } catch(e) {
+      listEl.innerHTML = `<div id="browser-loading">Error: ${e.message}</div>`;
+    }
+  }
+
+  async function browserNavigate(id, name) {
+    const listEl = document.getElementById('station-list');
+    listEl.innerHTML = '<div id="browser-loading">Loading…</div>';
+    try {
+      const r = await post('/api/navigate', { id });
+      const data = await r.json();
+      if (data.error) { listEl.innerHTML = `<div id="browser-loading">Error: ${data.error}</div>`; return; }
+      browserStack.push({ id, title: name });
+      renderBrowserItems(data);
+      updateBrowserNav(data.id, data.total);
+    } catch(e) {
+      listEl.innerHTML = `<div id="browser-loading">Error: ${e.message}</div>`;
+    }
+  }
+
+  async function browserBack() {
+    if (browserStack.length === 0) { browserLoad(); return; }
+    browserStack.pop();
+    const prev = browserStack.length ? browserStack[browserStack.length - 1] : null;
+    if (prev) {
+      browserStack.pop(); // will be re-pushed by browserNavigate
+      await browserNavigate(prev.id, prev.title);
+    } else {
+      await browserLoad();
+    }
+  }
+
+  function renderBrowserItems(data) {
+    const listEl = document.getElementById('station-list');
+    if (!data.items || !data.items.length) {
+      listEl.innerHTML = '<div id="browser-loading">No items found</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    data.items.forEach(item => {
+      const div = document.createElement('div');
+      div.className = 'stn-item' + (item.id === currentPlayingId ? ' playing' : '');
+      const isDir = item.type === 'dir';
+      div.innerHTML = `
+        <span class="stn-icon">${isDir ? '📁' : '🎵'}</span>
+        <span class="stn-name" title="${escHtml(item.name)}">${escHtml(item.name) || item.id}</span>
+        <span class="stn-play">${isDir ? '›' : '▶'}</span>
+      `;
+      div.onclick = () => {
+        if (isDir) {
+          browserNavigate(item.id, item.name);
+        } else {
+          playStation(item.id, item.name, div);
+        }
+      };
+      listEl.appendChild(div);
+    });
+  }
+
+  function updateBrowserNav(id, total) {
+    document.getElementById('browser-path').textContent =
+      (browserStack.length ? browserStack.map(s => s.title).join(' › ') + ' › ' : '') +
+      'id=' + id + (total ? ' (' + total + ' items)' : '');
+    document.getElementById('btn-back').style.display = browserStack.length ? 'inline-block' : 'none';
+  }
+
+  async function playStation(id, name, el) {
+    currentPlayingId = id;
+    document.querySelectorAll('.stn-item').forEach(d => d.classList.remove('playing'));
+    if (el) el.classList.add('playing');
+    try {
+      const r = await post('/api/command', { command: 'PlayStation', id, name });
+      if (r.error) log('ERROR: ' + r.error);
+      else log('Playing: ' + name + ' (' + id + ')');
+    } catch(e) { log('Error: ' + e.message); }
+  }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
   async function post(url, body) {
     const r = await fetch(url, {
@@ -432,12 +603,17 @@
       ['station','track','mode-label','bitrate','vol-num','volume-label']
         .forEach(id => setText(id, '—'));
       document.getElementById('vol-bar').style.width = '0%';
+      document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
     }
   }
 
   function setText(id, val) {
     const el = document.getElementById(id);
     if (el) el.textContent = val;
+  }
+
+  function escHtml(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
   function prettyXml(xml) {
