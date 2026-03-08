@@ -47,12 +47,13 @@ Open **http://localhost:5000** in your browser (or `http://<your-pc-ip>:5000` fr
 
 ## Troubleshooting
 
-### Radio returns "501 Not Implemented"
+### Radio returns a "can't open 'index.html'" connection error
 
-The Majority Pembroke's embedded HTTP server (port 8080) only handles **GET** requests.
-If you see `501 Not Implemented – The requested method is not recognized`, make sure you
-are running the latest version of `server.py` which uses GET instead of POST when
-communicating with the radio.
+The Majority Pembroke's embedded HTTP server (port 8080) uses **POST** requests for
+the XML command API.  Sending **GET** requests causes the radio to attempt to serve its
+built-in web UI (`index.html`), which fails and returns a non-HTTP response, resulting in
+a `BadStatusLine` / `Connection aborted` error.  Make sure you are running the latest
+version of `server.py` which uses POST when communicating with the radio.
 
 ### Is there a default password?
 

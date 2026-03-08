@@ -45,18 +45,12 @@ def build_xml(command: str, **params) -> str:
 
 
 def send_to_radio(xml: str) -> Optional[str]:
-    """Send an XML command to the radio via HTTP GET.
-
-    The radio's embedded HTTP server (port 8080) uses GET, not POST.
-    Sending POST results in "501 Not Implemented – The requested method
-    is not recognized".  The XML payload is placed in the request body
-    exactly as before; the only change is the HTTP verb.
-    """
+    """Send an XML command to the radio via HTTP POST on port 8080."""
     ip = state["ip"]
     if not ip:
         return None
     try:
-        resp = requests.get(
+        resp = requests.post(
             f"http://{ip}:{RADIO_XML_PORT}",
             data=xml.encode("utf-8"),
             headers={"Content-Type": "text/xml; charset=utf-8"},
