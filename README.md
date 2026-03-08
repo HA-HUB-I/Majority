@@ -45,6 +45,46 @@ Settings are saved to `config.json` in the project folder.
 Preset buttons show the **real station names** saved on the radio (e.g. "BG Radio", "Radio 1").  
 The active preset is highlighted in blue.
 
+## Windows Taskbar Integration
+
+`taskbar_app.py` provides a native Windows experience on top of the web controller:
+
+### Extra dependency (Windows only)
+
+```bash
+pip install pywin32
+```
+
+> `pystray` and `Pillow` are already included in `requirements.txt`.
+
+### Launch
+
+```bash
+# Start the Flask server AND the taskbar app together:
+python taskbar_app.py
+
+# Or if the Flask server is already running in another terminal:
+python taskbar_app.py --no-server
+```
+
+### Features
+
+| Feature | Description |
+|---|---|
+| **System tray icon** | Radio-wave icon in the notification area — green when playing, red when muted |
+| **Right-click menu** | Volume +/−, Mute, play any of the 8 saved favourites, open browser, exit |
+| **Popup control panel** | Click the tray icon to open a compact borderless panel above the taskbar showing station name, volume bar, playback controls and favourite preset buttons |
+| **Thumbnail toolbar** | When hovering over the taskbar button, five quick-action buttons appear: ⏮ Prev · 🔉 Vol− · 🔇 Mute · 🔊 Vol+ · ⏭ Next (Windows + pywin32 required) |
+| **Live status** | Tray tooltip and popup refresh every 2 seconds with station name and volume |
+
+### Popup panel
+
+The popup panel appears in the lower-right corner above the taskbar.  
+You can also **drag it** by the header bar to reposition it anywhere on screen.  
+Click **✕** or click anywhere outside the panel to dismiss it.
+
+---
+
 ## Features
 
 - **Real-time volume status** — updated immediately after every VOL/MUTE command

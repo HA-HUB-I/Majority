@@ -1,3 +1,8 @@
 flask>=3.0.0
 flask-socketio>=5.3.6
 requests>=2.31.0
+
+# Windows taskbar integration (taskbar_app.py)
+pystray>=0.19.5
+Pillow>=10.0.0
+# pywin32>=306  # Windows only — install manually: pip install pywin32
