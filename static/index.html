@@ -301,7 +301,7 @@
 <script>
   const socket = io();
   let debugOpen = false;
-  let maxVol = 32; // adjust if radio uses different scale
+  let maxVol = 20; // /setvol uses 0-20 range
 
   // ── Socket events ──────────────────────────────────────────────────────────
   socket.on('status', updateUI);
@@ -309,22 +309,42 @@
 
   // ── UI Update ──────────────────────────────────────────────────────────────
   function updateUI(s) {
-    // Now Playing fields — try common Magic M6/M7 field names
-    setText('mode-label',    modeLabel(s.Mode || s.mode || ''));
-    setText('station',       s.StationName || s.station_name || s.Name || '—');
-    setText('track',         s.SongTitle || s.song_title || s.Track || '—');
-    setText('bitrate',       s.Bitrate ? s.Bitrate + ' kbps' : '—');
+    // Station name — from /init (injected as cur_play_name) or legacy field names
+    setText('station', s.cur_play_name || s.StationName || s.station_name || s.Name || '—');
 
-    const vol = parseInt(s.Volume || s.volume || 0, 10);
-    setText('vol-num',       isNaN(vol) ? '—' : vol);
-    setText('volume-label',  isNaN(vol) ? 'Vol: —' : 'Vol: ' + vol);
+    // Playback status — /playinfo returns e.g. "Playing ", "Buffering 25%"
+    const playStatus = (s.status || s.SongTitle || s.song_title || s.Track || '').trim();
+    setText('track', playStatus || '—');
+
+    // Mode label — derive from stream info or legacy Mode field
+    const modeNum = s.Mode || s.mode;
+    if (modeNum !== undefined && modeNum !== '') {
+      setText('mode-label', modeLabel(modeNum));
+    } else {
+      // For /playinfo, show a generic label based on what's playing
+      const streamFmt = s.stream_format || '';
+      setText('mode-label', streamFmt ? 'INTERNET RADIO' : (s.cur_play_name ? 'INTERNET RADIO' : '—'));
+    }
+
+    // Bitrate — /playinfo gives stream_format, legacy gives Bitrate
+    setText('bitrate', s.stream_format || (s.Bitrate ? s.Bitrate + ' kbps' : '—'));
+
+    // Volume — /playinfo uses 'vol', legacy used 'Volume'/'volume'
+    const vol = parseInt(s.vol || s.Volume || s.volume || 0, 10);
+    setText('vol-num',      isNaN(vol) ? '—' : vol);
+    setText('volume-label', isNaN(vol) ? 'Vol: —' : 'Vol: ' + vol);
     document.getElementById('vol-bar').style.width =
       isNaN(vol) ? '0%' : Math.min(100, (vol / maxVol) * 100) + '%';
 
-    // Highlight active mode button
-    const modeNum = parseInt(s.Mode || s.mode || -1, 10);
+    // Mute indicator on the MUTE button
+    const isMuted = s.mute === '1' || s.mute === 1;
+    const muteBtn = document.querySelector('button.danger');
+    if (muteBtn) muteBtn.style.opacity = isMuted ? '1' : '0.6';
+
+    // Highlight active mode button (legacy Mode field only)
+    const modeIdx = parseInt(modeNum, 10);
     document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
-    const activeBtn = document.getElementById('mode-' + modeNum);
+    const activeBtn = document.getElementById('mode-' + modeIdx);
     if (activeBtn) activeBtn.classList.add('active');
 
     // Debug

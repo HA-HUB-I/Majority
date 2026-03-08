@@ -26,20 +26,22 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 RADIO_PORT = 80
 RADIO_AUTH = ("su3g4go6sk7", "ji39454xu/^")  # default Magic iRadio credentials
 RADIO_UDP_PORT = 38899
-POLL_INTERVAL = 2  # seconds between GetStatus polls
+POLL_INTERVAL = 2       # seconds between /playinfo polls
+INIT_REFRESH_INTERVAL = 30  # seconds between /init refreshes (updates station name)
+MAX_VOL = 20            # maximum volume for /setvol
 
 state = {
     "ip": None,
     "connected": False,
     "last_status": {},
-    "hotkeys": [],  # cached preset list: [{"id": "75_256", "name": "BG Radio"}, ...]
+    "hotkeys": [],           # cached preset list: [{"id": "75_256", "name": "BG Radio"}, ...]
+    "cur_play_name": "",     # current station name from /init
+    "cur_play_menu_id": "",  # current menu id from /init
 }
 
 # Maps UI command names → (REST path, extra query params)
+# VolumeUp / VolumeDown / Mute are handled separately via /setvol
 COMMAND_MAP = {
-    "VolumeUp":   ("volumeCtrl",   {"action": "plus"}),
-    "VolumeDown": ("volumeCtrl",   {"action": "minus"}),
-    "Mute":       ("volumeCtrl",   {"action": "mute"}),
     "PlayPause":  ("playControl",  {"play": "1"}),
     "Previous":   ("goBackward",   {}),
     "Next":       ("goForward",    {}),
@@ -119,13 +121,31 @@ def _refresh_hotkeys():
 # ── Background Status Poller ───────────────────────────────────────────────────
 
 def status_poller():
+    """Poll /playinfo every POLL_INTERVAL seconds and refresh /init every INIT_REFRESH_INTERVAL seconds."""
+    last_init_time = 0.0
     while True:
         if state["connected"] and state["ip"]:
-            resp = get_from_radio("GetStatus")
+            now = time.time()
+
+            # Periodically refresh /init to keep station name up to date
+            if now - last_init_time >= INIT_REFRESH_INTERVAL:
+                init_resp = get_from_radio("init", language="en")
+                if init_resp:
+                    info = parse_xml(init_resp)
+                    if info.get("rt") != "NO_SUPPORT":
+                        state["cur_play_name"] = info.get("cur_play_name", state["cur_play_name"])
+                        state["cur_play_menu_id"] = info.get("cur_play_menu_id", state["cur_play_menu_id"])
+                last_init_time = now
+
+            resp = get_from_radio("playinfo")
             if resp:
                 status = parse_xml(resp)
-                state["last_status"] = status
-                socketio.emit("status", status)
+                if status.get("rt") != "NO_SUPPORT":
+                    # Inject station name from cached /init data
+                    status["cur_play_name"] = state["cur_play_name"]
+                    status["cur_play_menu_id"] = state["cur_play_menu_id"]
+                    state["last_status"] = status
+                    socketio.emit("status", status)
             else:
                 if not _radio_reachable(state["ip"]):
                     state["connected"] = False
@@ -161,11 +181,20 @@ def api_connect():
 
     device_info = parse_xml(resp)
     state["connected"] = True
+    state["cur_play_name"] = device_info.get("cur_play_name", "")
+    state["cur_play_menu_id"] = device_info.get("cur_play_menu_id", "")
     log.info("Connected to radio at %s — firmware %s", ip, device_info.get("version", "?"))
 
-    # Seed the status with a real GetStatus call if available
-    status_resp = get_from_radio("GetStatus")
-    status = parse_xml(status_resp) if status_resp else {}
+    # Seed the status with a real /playinfo call
+    status_resp = get_from_radio("playinfo")
+    status = {}
+    if status_resp:
+        status = parse_xml(status_resp)
+        if status.get("rt") == "NO_SUPPORT":
+            status = {}
+        else:
+            status["cur_play_name"] = state["cur_play_name"]
+            status["cur_play_menu_id"] = state["cur_play_menu_id"]
     state["last_status"] = status
 
     # Cache preset list in background so it's ready for preset buttons
@@ -180,6 +209,8 @@ def api_disconnect():
     state["connected"] = False
     state["last_status"] = {}
     state["hotkeys"] = []
+    state["cur_play_name"] = ""
+    state["cur_play_menu_id"] = ""
     return jsonify(ok=True)
 
 
@@ -217,6 +248,40 @@ def api_command():
     if not state["ip"]:
         return jsonify(error="Not connected to radio"), 409
 
+    # ── VolumeUp ──────────────────────────────────────────────────────────────
+    if command == "VolumeUp":
+        cur_vol = int(state["last_status"].get("vol", 10) or 10)
+        new_vol = min(MAX_VOL, cur_vol + 1)
+        resp = get_from_radio("setvol", vol=new_vol, mute=0)
+        if resp is None:
+            return jsonify(error="No response from radio"), 502
+        log.info("VolumeUp %d → %d", cur_vol, new_vol)
+        state["last_status"]["vol"] = str(new_vol)
+        return jsonify(ok=True, raw=resp)
+
+    # ── VolumeDown ────────────────────────────────────────────────────────────
+    if command == "VolumeDown":
+        cur_vol = int(state["last_status"].get("vol", 10) or 10)
+        new_vol = max(0, cur_vol - 1)
+        resp = get_from_radio("setvol", vol=new_vol, mute=0)
+        if resp is None:
+            return jsonify(error="No response from radio"), 502
+        log.info("VolumeDown %d → %d", cur_vol, new_vol)
+        state["last_status"]["vol"] = str(new_vol)
+        return jsonify(ok=True, raw=resp)
+
+    # ── Mute (toggle) ─────────────────────────────────────────────────────────
+    if command == "Mute":
+        cur_mute = int(state["last_status"].get("mute", 0) or 0)
+        new_mute = 0 if cur_mute else 1
+        cur_vol = int(state["last_status"].get("vol", 10) or 10)
+        resp = get_from_radio("setvol", vol=cur_vol, mute=new_mute)
+        if resp is None:
+            return jsonify(error="No response from radio"), 502
+        log.info("Mute toggle → mute=%d", new_mute)
+        state["last_status"]["mute"] = str(new_mute)
+        return jsonify(ok=True, raw=resp)
+
     # ── SwitchMode ────────────────────────────────────────────────────────────
     if command == "SwitchMode":
         mode = data.get("Mode", data.get("mode", 0))
@@ -238,7 +303,7 @@ def api_command():
         entry = hotkeys[index - 1] if 0 < index <= len(hotkeys) else None
         if not entry:
             return jsonify(error=f"No hotkey at index {index}"), 404
-        resp = get_from_radio("playHotkey", id=entry["id"])
+        resp = get_from_radio("play_stn", id=entry["id"])
         if resp is None:
             return jsonify(error="No response from radio"), 502
         log.info("PlayFavorite #%d → %s (%s)", index, entry["name"], entry["id"])
