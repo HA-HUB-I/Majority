@@ -201,7 +201,21 @@
   }
 
   /* Presets */
-  .preset-btn { min-width: 44px; }
+  .preset-btn {
+    flex: 1 1 0;
+    min-width: 60px;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.78rem;
+    padding: 6px 4px;
+  }
+  .preset-btn.active-preset {
+    border-color: #00b4d8;
+    background: rgba(0,180,216,0.18);
+    font-weight: 600;
+  }
 
   /* Station browser */
   #browser-panel {
@@ -272,9 +286,85 @@
     white-space: pre-wrap;
     word-break: break-all;
   }
+
+  /* Toast notifications */
+  #toast-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    display: flex;
+    flex-direction: column-reverse;
+    gap: 8px;
+    z-index: 9999;
+    pointer-events: none;
+  }
+  .toast {
+    padding: 9px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #fff;
+    box-shadow: 0 2px 12px rgba(0,0,0,.5);
+    opacity: 1;
+    transition: opacity 0.4s;
+    max-width: 280px;
+    word-break: break-word;
+  }
+  .toast.ok    { background: #1b5e20; border-left: 3px solid var(--green); }
+  .toast.error { background: #7f1010; border-left: 3px solid var(--red); }
+  .toast.warn  { background: #4a3800; border-left: 3px solid var(--amber); }
+  .toast.info  { background: #1a2a3a; border-left: 3px solid #5b9bd5; }
+
+  /* Sysinfo modal */
+  #sysinfo-modal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.75);
+    z-index: 10000;
+    align-items: center;
+    justify-content: center;
+  }
+  #sysinfo-modal.open { display: flex; }
+  #sysinfo-box {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    max-width: 480px;
+    width: 90vw;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+  #sysinfo-box h2 { margin: 0 0 14px; font-size: 1rem; letter-spacing: 2px; color: var(--accent); }
+  .sysinfo-row { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+  .sysinfo-key { color: var(--dim); min-width: 140px; flex-shrink: 0; }
+  .sysinfo-val { color: var(--fg); word-break: break-all; }
+  #sysinfo-raw { margin-top: 10px; font-size: 0.72rem; color: var(--dim); white-space: pre-wrap; word-break: break-all; display: none; }
+  #sysinfo-box .close-btn { float: right; background: none; border: none; color: var(--dim); font-size: 1.2rem; cursor: pointer; padding: 0; line-height:1; }
+  #sysinfo-box .close-btn:hover { color: var(--fg); }
+  .play-badge-playing   { background: #1b5e20; color: #a5d6a7; }
+  .play-badge-buffering { background: #4a3800; color: #ffe082; }
+  .play-badge-stopped   { background: #333; color: #aaa; }
 </style>
 </head>
 <body>
+
+<div id="toast-container"></div>
+
+<!-- System Info Modal -->
+<div id="sysinfo-modal" onclick="if(event.target===this)closeSysInfo()">
+  <div id="sysinfo-box">
+    <button class="close-btn" onclick="closeSysInfo()">✕</button>
+    <h2>DEVICE INFO</h2>
+    <div id="sysinfo-loading" style="color:var(--dim);font-size:0.85rem">Loading…</div>
+    <div id="sysinfo-rows"></div>
+    <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+      <button class="small" onclick="document.getElementById('sysinfo-raw').style.display=document.getElementById('sysinfo-raw').style.display==='none'?'block':'none'">Toggle RAW XML</button>
+    </div>
+    <pre id="sysinfo-raw"></pre>
+  </div>
+</div>
 
 <h1>▶ Majority Radio</h1>
 
@@ -283,8 +373,17 @@
   <div class="card-title">Connection</div>
   <div class="connect-row">
     <input type="text" id="ip-input" placeholder="192.168.1.x" autocomplete="off" spellcheck="false">
-    <button class="accent" onclick="connect()">Connect</button>
+    <button id="conn-btn" class="accent" onclick="toggleConnect()">Connect</button>
     <button onclick="scan()" title="UDP broadcast scan (may not work on all networks)">Scan</button>
+    <button onclick="showSysInfo()" title="Device system info" style="font-size:0.9rem">ℹ</button>
+  </div>
+  <div class="connect-row" style="gap:16px;margin-top:4px;">
+    <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;cursor:pointer;">
+      <input type="checkbox" id="chk-remember"> Remember IP
+    </label>
+    <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;cursor:pointer;">
+      <input type="checkbox" id="chk-autoconn"> Auto-connect on start
+    </label>
   </div>
   <div id="conn-status"><span class="dot" id="conn-dot"></span><span id="conn-text">Not connected</span></div>
 </div>
@@ -300,6 +399,7 @@
       <div id="track">—</div>
       <div class="meta-row">
         <span id="bitrate">—</span>
+        <span id="play-status-badge" style="font-size:0.72rem;padding:2px 7px;border-radius:10px;display:none"></span>
         <span id="volume-label">Vol: —</span>
       </div>
     </div>
@@ -334,14 +434,57 @@
 <div class="card">
   <div class="card-title">Source</div>
   <div class="btn-row">
-    <button class="mode-btn" id="mode-0" onclick="switchMode(0)" title="Internet Radio — navigates to station menu">INET</button>
-    <button class="mode-btn" id="mode-1" onclick="switchMode(1)" title="Internet Radio (alt)">INET2</button>
-    <button class="mode-btn" id="mode-2" onclick="switchMode(2)" title="FM — menu ID unknown on this firmware">FM</button>
-    <button class="mode-btn" id="mode-3" onclick="switchMode(3)" title="DAB+ — menu ID unknown on this firmware">DAB</button>
-    <button class="mode-btn" id="mode-4" onclick="switchMode(4)" title="Bluetooth — menu ID unknown on this firmware">BT</button>
-    <button class="mode-btn" id="mode-5" onclick="switchMode(5)" title="AUX — menu ID unknown on this firmware">AUX</button>
+    <button class="mode-btn" id="mode-0" onclick="switchMode(0)" title="Internet Radio (menu id=52)">INET</button>
+    <button class="mode-btn" id="mode-1" onclick="switchMode(1)" title="Internet Radio alt (menu id=52)">INET2</button>
+    <button class="mode-btn" id="mode-2" onclick="switchMode(2)" title="FM Radio (menu id=5)">FM</button>
+    <button class="mode-btn" id="mode-3" onclick="switchMode(3)" title="DAB+ Radio (menu id=91)">DAB</button>
+    <button class="mode-btn" id="mode-4" onclick="switchMode(4)" title="Bluetooth (menu id=104)">BT</button>
+    <button class="mode-btn" id="mode-5" onclick="switchMode(5)" title="AUX In (menu id=47)">AUX</button>
   </div>
   <div id="source-note" style="margin-top:6px;font-size:11px;color:var(--dim);display:none"></div>
+</div>
+
+<!-- FM Panel (shown in FM mode) -->
+<div class="card" id="fm-panel" style="display:none">
+  <div class="card-title">FM Radio</div>
+
+  <!-- FM Status -->
+  <div style="display:flex;align-items:center;gap:16px;margin-bottom:12px;">
+    <div style="font-size:2rem;font-weight:700;letter-spacing:2px;color:var(--accent)" id="fm-freq">—</div>
+    <div style="font-size:0.8rem;color:var(--dim)">MHz</div>
+    <div id="fm-signal" style="display:flex;gap:3px;align-items:flex-end;margin-left:4px"></div>
+    <div id="fm-sound" style="font-size:0.75rem;color:var(--dim);margin-left:4px">—</div>
+    <div id="fm-rds" style="font-size:0.8rem;color:var(--fg);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+  </div>
+
+  <!-- Tune controls -->
+  <div class="btn-row" style="margin-bottom:10px;">
+    <button class="wide" onclick="cmd('FMTuneDown')">◀ Scan</button>
+    <button class="wide" onclick="cmd('FMTuneUp')">Scan ▶</button>
+    <button class="wide small" onclick="toggleFMMode()">STEREO/MONO</button>
+  </div>
+
+  <!-- Manual frequency -->
+  <div class="connect-row" style="margin-bottom:10px;">
+    <input type="number" id="fm-freq-input" min="87.5" max="108.0" step="0.1"
+           placeholder="89.5" style="flex:1;max-width:100px;">
+    <span style="font-size:0.85rem;color:var(--dim)">MHz</span>
+    <button class="accent small" onclick="setFMFreq()">Go</button>
+  </div>
+
+  <!-- FM Favorites from device -->
+  <div style="margin-bottom:6px;">
+    <div style="font-size:0.75rem;color:var(--dim);margin-bottom:4px;letter-spacing:1px;">DEVICE FAVORITES</div>
+    <div id="fm-favs-row" class="btn-row">
+      <span style="color:var(--dim);font-size:0.8rem">Loading…</span>
+    </div>
+  </div>
+
+  <!-- BG FM Stations quick list -->
+  <div>
+    <div style="font-size:0.75rem;color:var(--dim);margin-bottom:4px;letter-spacing:1px;">BG FM СТАНЦИИ (СОФИЯ)</div>
+    <div id="bg-fm-list" class="btn-row" style="flex-wrap:wrap;"></div>
+  </div>
 </div>
 
 <!-- Station Browser -->
@@ -349,6 +492,10 @@
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
     <div class="card-title" style="margin-bottom:0">Stations</div>
     <button class="small" onclick="toggleBrowser()">▶ Browse</button>
+  </div>
+  <div class="connect-row" style="margin-bottom:6px;">
+    <input type="text" id="search-input" placeholder="Search stations…" autocomplete="off" style="flex:1;">
+    <button class="small accent" onclick="searchStations()">Search</button>
   </div>
   <div id="browser-panel">
     <div class="browser-nav">
@@ -366,14 +513,14 @@
 <div class="card">
   <div class="card-title">Presets</div>
   <div id="presets-row" class="btn-row">
-    <button class="preset-btn" onclick="preset(1)">1</button>
-    <button class="preset-btn" onclick="preset(2)">2</button>
-    <button class="preset-btn" onclick="preset(3)">3</button>
-    <button class="preset-btn" onclick="preset(4)">4</button>
-    <button class="preset-btn" onclick="preset(5)">5</button>
-    <button class="preset-btn" onclick="preset(6)">6</button>
-    <button class="preset-btn" onclick="preset(7)">7</button>
-    <button class="preset-btn" onclick="preset(8)">8</button>
+    <button class="preset-btn" data-preset-index="1" onclick="preset(1)">1</button>
+    <button class="preset-btn" data-preset-index="2" onclick="preset(2)">2</button>
+    <button class="preset-btn" data-preset-index="3" onclick="preset(3)">3</button>
+    <button class="preset-btn" data-preset-index="4" onclick="preset(4)">4</button>
+    <button class="preset-btn" data-preset-index="5" onclick="preset(5)">5</button>
+    <button class="preset-btn" data-preset-index="6" onclick="preset(6)">6</button>
+    <button class="preset-btn" data-preset-index="7" onclick="preset(7)">7</button>
+    <button class="preset-btn" data-preset-index="8" onclick="preset(8)">8</button>
   </div>
 </div>
 
@@ -415,8 +562,29 @@
       setText('mode-label', streamFmt ? 'INTERNET RADIO' : (s.cur_play_name ? 'INTERNET RADIO' : '—'));
     }
 
-    // Bitrate
+    // Bitrate / stream format
     setText('bitrate', s.stream_format || (s.Bitrate ? s.Bitrate + ' kbps' : '—'));
+
+    // Play status badge (Playing / Buffering / Stopped) from /playinfo
+    const badge = document.getElementById('play-status-badge');
+    if (badge) {
+      const ps = (s.status || '').toLowerCase();
+      if (ps.includes('play')) {
+        badge.textContent = '▶ Playing';
+        badge.className = 'play-badge-playing';
+        badge.style.display = '';
+      } else if (ps.includes('buffer') || ps.includes('load') || ps.includes('connect')) {
+        badge.textContent = '⏳ ' + (s.status || 'Buffering');
+        badge.className = 'play-badge-buffering';
+        badge.style.display = '';
+      } else if (ps.includes('stop') || ps.includes('pause')) {
+        badge.textContent = '⏹ ' + (s.status || 'Stopped');
+        badge.className = 'play-badge-stopped';
+        badge.style.display = '';
+      } else {
+        badge.style.display = 'none';
+      }
+    }
 
     // Volume
     const volRaw = s.vol !== undefined ? s.vol : (s.Volume !== undefined ? s.Volume : s.volume);
@@ -445,12 +613,113 @@
       if (activeBtn) activeBtn.classList.add('active');
     }
 
-    if (s._raw) log('STATUS:\n' + prettyXml(s._raw));
+    // Show/hide FM panel and update FM status fields
+    const fmPanel = document.getElementById('fm-panel');
+    if (modeNum === '2') {
+      fmPanel.style.display = '';
+      if (s.Freq) {
+        setText('fm-freq', s.Freq);
+        const fi = document.getElementById('fm-freq-input');
+        if (fi && !fi.matches(':focus')) fi.value = s.Freq;
+      }
+      if (s.Sound) setText('fm-sound', s.Sound);
+      if (s.RDS !== undefined) setText('fm-rds', s.RDS || '');
+      if (s.Signal !== undefined) renderFMSignal(parseInt(s.Signal, 10));
+    } else {
+      fmPanel.style.display = 'none';
+    }
+
+    // Only log _raw when it contains actual useful data (not FAIL/NO_SUPPORT noise)
+    if (s._raw && !s._raw.includes('FAIL') && !s._raw.includes('NO_SUPPORT')) {
+      log('STATUS:\n' + prettyXml(s._raw));
+    }
+  }
+
+  function renderFMSignal(sig) {
+    const el = document.getElementById('fm-signal');
+    if (!el) return;
+    const bars = 5;
+    el.innerHTML = '';
+    for (let i = 1; i <= bars; i++) {
+      const b = document.createElement('div');
+      b.style.cssText = `width:4px;height:${i * 4 + 4}px;border-radius:1px;background:${i <= sig ? 'var(--green)' : 'var(--border)'}`;
+      el.appendChild(b);
+    }
   }
 
   function modeLabel(m) {
     const map = { '0': 'INTERNET RADIO', '1': 'INTERNET RADIO', '2': 'FM', '3': 'DAB+', '4': 'BLUETOOTH', '5': 'AUX' };
     return map[String(m)] || (m ? 'MODE ' + m : '—');
+  }
+
+  // ── FM Functions ────────────────────────────────────────────────────────────
+  const BG_FM_STATIONS = [
+    { name: "BG Radio",          freq: "89.1"  },
+    { name: "BNR Radio 1",       freq: "91.9"  },
+    { name: "BNR Horizont",      freq: "100.8" },
+    { name: "BNR Hr. Botev",     freq: "106.9" },
+    { name: "Radio Vitosha",     freq: "95.5"  },
+    { name: "Radio FM+",         freq: "91.5"  },
+    { name: "Fresh",             freq: "99.9"  },
+    { name: "Darik Radio",       freq: "106.0" },
+    { name: "Radio City",        freq: "102.0" },
+    { name: "Radio Energy",      freq: "93.0"  },
+    { name: "N-Joy",             freq: "100.5" },
+    { name: "Tangra Mega Rock",  freq: "95.0"  },
+    { name: "Radio Melody",      freq: "93.9"  },
+    { name: "Radio Veronika",    freq: "92.9"  },
+    { name: "Z-Rock",            freq: "90.3"  },
+    { name: "Radio Veselina",    freq: "107.0" },
+    { name: "Choice Radio",      freq: "104.0" },
+  ];
+
+  function initBGFMList() {
+    const el = document.getElementById('bg-fm-list');
+    if (!el) return;
+    el.innerHTML = BG_FM_STATIONS.map(s =>
+      `<button class="preset-btn" onclick="setFMFreqDirect('${s.freq}')" title="${s.freq} MHz">${s.name}</button>`
+    ).join('');
+  }
+
+  async function setFMFreq() {
+    const input = document.getElementById('fm-freq-input');
+    const freq = input ? input.value.trim() : '';
+    if (!freq) { toast('Enter a frequency first', 'warn', 2000); return; }
+    const r = await cmd('SetFMFreq', { freq });
+    if (r && r.ok) toast('Tuned to ' + freq + ' MHz', 'ok', 2500);
+  }
+
+  async function setFMFreqDirect(freq) {
+    const input = document.getElementById('fm-freq-input');
+    if (input) input.value = freq;
+    const r = await cmd('SetFMFreq', { freq });
+    if (r && r.ok) toast('Tuned to ' + freq + ' MHz', 'ok', 2000);
+  }
+
+  let fmSoundMode = 'stereo';
+  async function toggleFMMode() {
+    fmSoundMode = fmSoundMode === 'stereo' ? 'mono' : 'stereo';
+    await cmd('SetFMMode', { mode: fmSoundMode });
+    log('FM mode set to ' + fmSoundMode);
+  }
+
+  async function loadFMFavs() {
+    try {
+      const r = await fetch('/api/fm_favorites');
+      const data = await r.json();
+      const row = document.getElementById('fm-favs-row');
+      if (!row) return;
+      if (!data.favorites || !data.favorites.length) {
+        row.innerHTML = '<span style="color:var(--dim);font-size:0.8rem">No device favorites</span>';
+        return;
+      }
+      row.innerHTML = data.favorites.map((f, i) =>
+        `<button class="preset-btn" onclick="cmd('GotoFMFav',{fav:${f.id !== undefined ? f.id : i+1}})" title="${f.freq || ''} MHz">${f.name || ('Fav '+(i+1))}</button>`
+      ).join('');
+    } catch(e) {
+      const row = document.getElementById('fm-favs-row');
+      if (row) row.innerHTML = '<span style="color:var(--dim);font-size:0.8rem">Failed to load</span>';
+    }
   }
 
   // ── API Calls ──────────────────────────────────────────────────────────────
@@ -462,13 +731,19 @@
       const r = await post('/api/connect', { ip });
       if (r.ok) {
         setConnState(true, 'Connected to ' + ip);
+        toast('Connected to ' + ip, 'ok', 3000);
         if (r.status && Object.keys(r.status).length) updateUI(r.status);
         loadHotkeys();
+        loadFMFavs();
+        initBGFMList();
         startArtRefresh();
+        saveSettings();
       } else {
-        setConnState(false, r.error || 'Failed');
+        const msg = r.error || 'Failed';
+        setConnState(false, msg);
+        toast('Connection failed: ' + msg, 'error', 5000);
       }
-    } catch(e) { setConnState(false, 'Error: ' + e.message); }
+    } catch(e) { setConnState(false, 'Error: ' + e.message); toast('Connect error: ' + e.message, 'error', 5000); }
   }
 
   async function loadHotkeys() {
@@ -482,7 +757,8 @@
         const btn = document.createElement('button');
         btn.className = 'preset-btn';
         btn.title = hk.name;
-        btn.textContent = hk.name ? hk.name.substring(0, 8) : (i + 1);
+        btn.textContent = hk.name || (i + 1);
+        btn.dataset.presetIndex = i + 1;
         btn.onclick = () => preset(i + 1);
         row.appendChild(btn);
       });
@@ -505,33 +781,58 @@
   async function cmd(command, extras = {}) {
     try {
       const r = await post('/api/command', { command, ...extras });
-      if (r.raw) log('CMD ' + command + ' → ' + prettyXml(r.raw));
-      else if (r.note) log('CMD ' + command + ' → ' + r.note);
-      else if (r.error) log('ERROR: ' + r.error);
-    } catch(e) { log('Error: ' + e.message); }
+      if (r.ok) {
+        // Only show toast for non-volume commands to avoid spam
+        const silent = ['VolumeUp','VolumeDown'].includes(command);
+        if (!silent) toast(command.replace(/([A-Z])/g, ' $1').trim() + ' ✓', 'ok', 2000);
+        if (r.raw) log('CMD ' + command + ' → ' + prettyXml(r.raw));
+        else if (r.note) log('CMD ' + command + ' → ' + r.note);
+      } else {
+        const msg = r.error || 'Command failed';
+        toast(command + ': ' + msg, 'error', 4000);
+        log('ERROR ' + command + ': ' + msg + (r.raw ? '\n' + prettyXml(r.raw) : ''));
+      }
+      return r;
+    } catch(e) {
+      toast(command + ': ' + e.message, 'error', 4000);
+      log('Error: ' + e.message);
+      return { ok: false, error: e.message };
+    }
   }
 
   async function switchMode(n) {
     const noteEl = document.getElementById('source-note');
     noteEl.style.display = 'none';
+    const modeNames = {0:'Internet Radio',1:'Internet Radio',2:'FM',3:'DAB+',4:'Bluetooth',5:'AUX'};
     try {
       const r = await post('/api/command', { command: 'SwitchMode', Mode: n });
       if (r.ok) {
+        toast('→ ' + (modeNames[n] || 'Mode ' + n), 'ok', 2500);
         if (r.note) {
           noteEl.textContent = r.note;
           noteEl.style.display = 'block';
         }
         if (r.raw) log('SwitchMode → ' + prettyXml(r.raw));
+        // Load FM favorites when switching to FM
+        if (n === 2) { loadFMFavs(); initBGFMList(); }
       } else {
         const msg = r.error || r.hint || 'Source switching not supported on this firmware';
+        toast('SwitchMode: ' + msg, 'error', 5000);
         noteEl.textContent = msg;
         noteEl.style.display = 'block';
         log('SwitchMode mode=' + n + ': ' + msg);
       }
-    } catch(e) { log('Error: ' + e.message); }
+    } catch(e) { toast('SwitchMode error: ' + e.message, 'error'); log('Error: ' + e.message); }
   }
 
-  function preset(n) { cmd('PlayFavorite', { Index: n }); }
+  function preset(n) {
+    document.querySelectorAll('.preset-btn').forEach(b => b.classList.remove('active-preset'));
+    const active = document.querySelector(`.preset-btn[data-preset-index="${n}"]`);
+    if (active) active.classList.add('active-preset');
+    cmd('PlayFavorite', { Index: n }).then(r => {
+      if (r && r.ok && r.name) toast('▶ ' + r.name, 'ok', 2500);
+    });
+  }
 
   // ── Album Art ──────────────────────────────────────────────────────────────
   let lastArtHash = null;
@@ -564,6 +865,26 @@
   }
 
   // ── Station Browser ────────────────────────────────────────────────────────
+  async function searchStations() {
+    const q = document.getElementById('search-input').value.trim();
+    if (!q) return;
+    const listEl = document.getElementById('station-list');
+    listEl.innerHTML = '<div id="browser-loading">Searching…</div>';
+    // Open browser panel if closed
+    if (!browserOpen) toggleBrowser();
+    try {
+      const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+      const data = await r.json();
+      if (data.error) { listEl.innerHTML = `<div id="browser-loading">Error: ${data.error}</div>`; return; }
+      document.getElementById('browser-path').textContent =
+        `Search: "${q}" — ${data.total} result(s)`;
+      document.getElementById('btn-back').style.display = 'none';
+      renderBrowserItems(data);
+    } catch(e) {
+      listEl.innerHTML = `<div id="browser-loading">Error: ${e.message}</div>`;
+    }
+  }
+
   function toggleBrowser() {
     browserOpen = !browserOpen;
     const panel = document.getElementById('browser-panel');
@@ -656,12 +977,16 @@
     if (el) el.classList.add('playing');
     try {
       const r = await post('/api/command', { command: 'PlayStation', id, name });
-      if (r.error) log('ERROR: ' + r.error);
-      else {
+      if (!r.ok || r.error) {
+        toast('Play failed: ' + (r.error || 'unknown'), 'error', 4000);
+        log('ERROR: ' + (r.error || ''));
+        if (el) el.classList.remove('playing');
+      } else {
+        toast('▶ ' + name, 'ok', 2500);
         log('Playing: ' + name + ' (' + id + ')');
-        setTimeout(refreshAlbumArt, 2000); // art changes after a few seconds
+        setTimeout(refreshAlbumArt, 2000);
       }
-    } catch(e) { log('Error: ' + e.message); }
+    } catch(e) { toast('Error: ' + e.message, 'error'); log('Error: ' + e.message); }
   }
 
   // ── Helpers ────────────────────────────────────────────────────────────────
@@ -677,12 +1002,61 @@
   function setConnState(connected, text) {
     document.getElementById('conn-dot').className = 'dot' + (connected ? ' on' : ' err');
     document.getElementById('conn-text').textContent = text;
+    document.getElementById('conn-btn').textContent = connected ? 'Disconnect' : 'Connect';
+    document.getElementById('conn-btn').className = connected ? 'danger' : 'accent';
     if (!connected) {
       ['station','track','mode-label','bitrate','vol-num','volume-label']
         .forEach(id => setText(id, '—'));
       document.getElementById('vol-bar').style.width = '0%';
       document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
       stopArtRefresh();
+    }
+  }
+
+  async function loadSettings() {
+    try {
+      const r = await fetch('/api/settings');
+      const cfg = await r.json();
+      if (cfg.ip) document.getElementById('ip-input').value = cfg.ip;
+      document.getElementById('chk-remember').checked = !!cfg.ip;
+      document.getElementById('chk-autoconn').checked = !!cfg.auto_connect;
+      // Auto-connect if server already connected (state carried from _auto_connect)
+      if (cfg.auto_connect && cfg.ip) {
+        const sr = await fetch('/api/status');
+        const st = await sr.json();
+        if (st && Object.keys(st).length) {
+          setConnState(true, 'Connected to ' + cfg.ip);
+          updateUI(st);
+          loadHotkeys();
+          loadFMFavs();
+          initBGFMList();
+          startArtRefresh();
+        } else {
+          connect();
+        }
+      }
+    } catch(e) { /* ignore */ }
+  }
+
+  async function saveSettings() {
+    const ip = document.getElementById('ip-input').value.trim();
+    const remember = document.getElementById('chk-remember').checked;
+    const autoconn = document.getElementById('chk-autoconn').checked;
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip: remember ? ip : '', auto_connect: autoconn }),
+    });
+  }
+
+  async function toggleConnect() {
+    const connected = document.getElementById('conn-btn').textContent === 'Disconnect';
+    if (connected) {
+      await post('/api/disconnect', {});
+      setConnState(false, 'Disconnected');
+      toast('Disconnected', 'info', 2500);
+    } else {
+      connect();
     }
   }
 
@@ -705,16 +1079,95 @@
     p.scrollTop = p.scrollHeight;
   }
 
+  let _toastTimer = {};
+  function toast(msg, type = 'ok', duration = 3000) {
+    const el = document.createElement('div');
+    el.className = 'toast ' + type;
+    el.textContent = msg;
+    const container = document.getElementById('toast-container');
+    container.appendChild(el);
+    setTimeout(() => {
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 420);
+    }, duration);
+  }
+
   function toggleDebug() {
     debugOpen = !debugOpen;
     document.getElementById('debug-panel').style.display = debugOpen ? 'block' : 'none';
     document.getElementById('debug-toggle').textContent = (debugOpen ? '▼' : '▶') + ' RAW DEBUG';
   }
 
+  // ── System Info modal ─────────────────────────────────────────────────────
+  const SYSINFO_LABELS = {
+    ip: 'IP Address', connected: 'Connected', version: 'Firmware', PlayMode: 'Play Mode',
+    cur_play_name: 'Now Playing', cached_hotkeys: 'Cached Presets',
+    MAC: 'MAC Address', UUID: 'UUID', HardwareVersion: 'Hardware', FriendlyName: 'Device Name',
+    country: 'Country', language: 'Language', timezone: 'Timezone',
+    WifiChannel: 'WiFi Channel', WifiRSSI: 'WiFi Signal',
+    UpTime: 'Uptime', Build: 'Build', ReleaseBuild: 'Release',
+  };
+  const HIDDEN_KEYS = ['_raw_sysinfo', '_raw_init'];
+
+  async function showSysInfo() {
+    const modal = document.getElementById('sysinfo-modal');
+    const rows = document.getElementById('sysinfo-rows');
+    const loading = document.getElementById('sysinfo-loading');
+    const rawEl = document.getElementById('sysinfo-raw');
+    modal.classList.add('open');
+    rows.innerHTML = '';
+    rawEl.style.display = 'none';
+    rawEl.textContent = '';
+    loading.style.display = 'block';
+    try {
+      const r = await fetch('/api/sysinfo');
+      const data = await r.json();
+      loading.style.display = 'none';
+      if (data.error) { rows.innerHTML = `<div style="color:var(--red)">${data.error}</div>`; return; }
+      // Render known labels first, then remaining fields
+      const shown = new Set();
+      const renderRow = (key, val) => {
+        if (shown.has(key) || HIDDEN_KEYS.includes(key)) return;
+        shown.add(key);
+        const label = SYSINFO_LABELS[key] || key;
+        const div = document.createElement('div');
+        div.className = 'sysinfo-row';
+        div.innerHTML = `<span class="sysinfo-key">${escHtml(label)}</span><span class="sysinfo-val">${escHtml(String(val))}</span>`;
+        rows.appendChild(div);
+      };
+      Object.keys(SYSINFO_LABELS).forEach(k => { if (k in data) renderRow(k, data[k]); });
+      Object.keys(data).filter(k => !k.startsWith('_')).forEach(k => renderRow(k, data[k]));
+      // Raw XML
+      const rawParts = [data._raw_sysinfo, data._raw_init].filter(Boolean);
+      if (rawParts.length) {
+        rawEl.textContent = rawParts.join('\n\n---\n\n');
+      }
+    } catch(e) {
+      loading.style.display = 'none';
+      rows.innerHTML = `<div style="color:var(--red)">Error: ${escHtml(e.message)}</div>`;
+    }
+  }
+
+  function closeSysInfo() {
+    document.getElementById('sysinfo-modal').classList.remove('open');
+  }
+
   // ── Enter key on IP input ──────────────────────────────────────────────────
   document.getElementById('ip-input').addEventListener('keydown', e => {
     if (e.key === 'Enter') connect();
   });
+  document.getElementById('search-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') searchStations();
+  });
+  document.getElementById('fm-freq-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') setFMFreq();
+  });
+
+  // ── On page load: restore saved settings and auto-connect if configured ───
+  loadSettings();
+
+  // Close sysinfo modal on Escape key
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSysInfo(); });
 </script>
 </body>
 </html>
