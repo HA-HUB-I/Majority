@@ -45,6 +45,20 @@ Open **http://localhost:5000** in your browser (or `http://<your-pc-ip>:5000` fr
 | 8080 (TCP) | Radio XML command API |
 | 38899 (UDP) | Optional auto-discovery broadcast |
 
+## Troubleshooting
+
+### Radio returns "501 Not Implemented"
+
+The Majority Pembroke's embedded HTTP server (port 8080) only handles **GET** requests.
+If you see `501 Not Implemented – The requested method is not recognized`, make sure you
+are running the latest version of `server.py` which uses GET instead of POST when
+communicating with the radio.
+
+### Is there a default password?
+
+The web interface (`http://localhost:5000`) has **no password** – just open it in a
+browser.  The radio itself also does not require a PIN for the YMP XML API on port 8080.
+
 ## Debug
 
 Expand the **RAW DEBUG** panel in the UI to see the raw XML exchanged with the radio.  

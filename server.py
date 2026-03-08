@@ -44,12 +44,19 @@ def build_xml(command: str, **params) -> str:
     return '<?xml version="1.0" encoding="UTF-8"?>' + ET.tostring(root, encoding="unicode")
 
 
-def post_to_radio(xml: str) -> Optional[str]:
+def send_to_radio(xml: str) -> Optional[str]:
+    """Send an XML command to the radio via HTTP GET.
+
+    The radio's embedded HTTP server (port 8080) uses GET, not POST.
+    Sending POST results in "501 Not Implemented – The requested method
+    is not recognized".  The XML payload is placed in the request body
+    exactly as before; the only change is the HTTP verb.
+    """
     ip = state["ip"]
     if not ip:
         return None
     try:
-        resp = requests.post(
+        resp = requests.get(
             f"http://{ip}:{RADIO_XML_PORT}",
             data=xml.encode("utf-8"),
             headers={"Content-Type": "text/xml; charset=utf-8"},
@@ -59,6 +66,10 @@ def post_to_radio(xml: str) -> Optional[str]:
     except requests.RequestException as e:
         log.warning("Radio HTTP error: %s", e)
         return None
+
+
+# Keep the old name as an alias so any future callers still work.
+post_to_radio = send_to_radio
 
 
 def parse_status(xml_text: str) -> dict:
