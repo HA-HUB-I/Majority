@@ -24,9 +24,10 @@ app.config["SECRET_KEY"] = "majority-radio-secret"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 RADIO_PORT = 80
+RADIO_MEDIA_PORT = 8080   # album art / playlogo.jpg served on a separate port
 RADIO_AUTH = ("su3g4go6sk7", "ji39454xu/^")  # default Magic iRadio credentials
 RADIO_UDP_PORT = 38899
-POLL_INTERVAL = 2       # seconds between /playinfo polls
+POLL_INTERVAL = 2       # seconds between status polls
 INIT_REFRESH_INTERVAL = 30  # seconds between /init refreshes (updates station name)
 MAX_VOL = 20            # maximum volume for /setvol
 
@@ -38,6 +39,7 @@ state = {
     "cur_play_name": "",     # current station name from /init
     "cur_play_menu_id": "",  # current menu id from /init (used as root for station browser)
     "browse_stack": [],      # navigation stack for station browser: list of {"id", "title"}
+    "albumart_hash": None,   # last seen hash of playlogo.jpg (used for change detection)
 }
 
 # Maps UI command names → (REST path, extra query params)
@@ -95,6 +97,25 @@ def _radio_reachable(ip: str) -> bool:
         return False
 
 
+def get_albumart_bytes() -> Optional[bytes]:
+    """Fetch album art from the radio's media port (8080). Returns raw bytes or None."""
+    ip = state["ip"]
+    if not ip:
+        return None
+    try:
+        resp = requests.get(
+            f"http://{ip}:{RADIO_MEDIA_PORT}/playlogo.jpg",
+            auth=RADIO_AUTH,
+            timeout=3,
+            stream=False,
+        )
+        if resp.ok and resp.content:
+            return resp.content
+        return None
+    except requests.RequestException:
+        return None
+
+
 def _emit_status():
     """Broadcast the current tracked state to all connected WebSocket clients."""
     socketio.emit("status", state["last_status"])
@@ -133,7 +154,12 @@ def _refresh_hotkeys():
 # ── Background Status Poller ───────────────────────────────────────────────────
 
 def status_poller():
-    """Poll /playinfo every POLL_INTERVAL seconds and refresh /init every INIT_REFRESH_INTERVAL seconds."""
+    """Poll status every POLL_INTERVAL seconds.
+    Since /playinfo returns NO_SUPPORT on this firmware, we:
+    1. Poll /playinfo (handles firmware that does support it)
+    2. Fetch /playlogo.jpg hash from port 8080 — if it changes, the station changed
+    3. Emit current manually-tracked state so the UI stays alive
+    """
     last_init_time = 0.0
     while True:
         if state["connected"] and state["ip"]:
@@ -147,22 +173,29 @@ def status_poller():
                     if info.get("rt") != "NO_SUPPORT":
                         state["cur_play_name"] = info.get("cur_play_name", state["cur_play_name"])
                         state["cur_play_menu_id"] = info.get("cur_play_menu_id", state["cur_play_menu_id"])
-                        # PlayMode from /init maps to source mode (0=INET, 1=also INET on some fw, 2=FM, etc.)
                         play_mode = info.get("PlayMode", "")
                         if play_mode:
                             state["last_status"].setdefault("Mode", play_mode)
                 last_init_time = now
 
+            # Try /playinfo — works on standard firmware, returns NO_SUPPORT on j327...
             resp = get_from_radio("playinfo")
             if resp:
                 status = parse_xml(resp)
                 if status.get("rt") == "NO_SUPPORT":
-                    # /playinfo not supported — emit our manually tracked state so the UI stays current
-                    if state["last_status"]:
-                        state["last_status"]["cur_play_name"] = state["cur_play_name"]
-                        _emit_status()
+                    # Firmware doesn't support /playinfo — use album art hash to detect changes
+                    art = get_albumart_bytes()
+                    if art:
+                        art_hash = hash(art)
+                        if art_hash != state["albumart_hash"]:
+                            state["albumart_hash"] = art_hash
+                            log.info("Album art changed — station may have changed (hash=%s)", art_hash)
+                            # Signal UI that art changed (triggers img refresh)
+                            state["last_status"]["_art_changed"] = str(art_hash)
+
+                    state["last_status"]["cur_play_name"] = state["cur_play_name"]
+                    _emit_status()
                 else:
-                    # Inject station name from cached /init data
                     status["cur_play_name"] = state["cur_play_name"]
                     status["cur_play_menu_id"] = state["cur_play_menu_id"]
                     state["last_status"].update(status)
@@ -328,15 +361,33 @@ def api_command():
         return jsonify(ok=True, mute=actual_mute, raw=resp)
 
     # ── SwitchMode ────────────────────────────────────────────────────────────
+    # NOTE: /switchMode returns NO_SUPPORT on firmware j327...
+    # Internet Radio is activated via menu navigation (/gochild + /list + /play_stn).
+    # FM/DAB/BT/AUX menu IDs are not yet discovered — see API_DISCOVERY.md.
     if command == "SwitchMode":
-        mode = data.get("Mode", data.get("mode", 0))
+        mode = str(data.get("Mode", data.get("mode", 0)))
+        # Try the standard API first (works on newer firmware)
         resp = get_from_radio("switchMode", mode=mode)
-        if resp is None:
-            return jsonify(error="No response from radio"), 502
-        log.info("SwitchMode → mode=%s", mode)
-        # Update mode in tracked state and emit regardless of radio response validity
-        _merge_status(Mode=str(mode))
-        return jsonify(ok=True, raw=resp)
+        if resp:
+            parsed = parse_xml(resp)
+            if parsed.get("rt") != "NO_SUPPORT" and "FAIL" not in resp:
+                log.info("SwitchMode → mode=%s (standard API)", mode)
+                _merge_status(Mode=mode)
+                return jsonify(ok=True, raw=resp)
+        # Standard API not supported — try navigating to Internet Radio via menu
+        if mode in ("0", "1"):
+            nav_resp = get_from_radio("gochild", id="87")
+            log.info("SwitchMode mode=%s → navigated to Internet Radio menu (gochild id=87)", mode)
+            _merge_status(Mode=mode)
+            return jsonify(ok=True, note="Navigated to Internet Radio menu. Use Stations browser to pick a station.")
+        # FM/DAB/BT/AUX — menu IDs not yet discovered
+        log.warning("SwitchMode mode=%s — menu ID unknown for this firmware", mode)
+        return jsonify(
+            ok=False,
+            error=f"Source switching to mode {mode} is not supported on this firmware. "
+                  f"Menu navigation IDs for FM/DAB/BT/AUX are not yet discovered.",
+            hint="Use the Stations browser for Internet Radio. FM/DAB require menu ID discovery.",
+        ), 501
 
     # ── PlayFavorite (hotkey by 1-based index) ────────────────────────────────
     if command == "PlayFavorite":
@@ -473,6 +524,22 @@ def api_navigate():
     except ET.ParseError as e:
         log.warning("Navigate parse error for id=%s: %s", menu_id, e)
         return jsonify(error="XML parse error", raw=xml_text), 500
+
+
+@app.route("/api/albumart")
+def api_albumart():
+    """Proxy the album art image from the radio's media port (8080).
+    The image changes when the station changes — useful for change detection."""
+    from flask import Response
+    if not state["ip"]:
+        return jsonify(error="Not connected"), 409
+    art = get_albumart_bytes()
+    if not art:
+        return jsonify(error="No album art available"), 404
+    return Response(art, mimetype="image/jpeg", headers={
+        "Cache-Control": "no-store",
+        "X-Art-Hash": str(hash(art)),
+    })
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────

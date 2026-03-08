@@ -89,6 +89,23 @@
   }
 
   /* Now Playing */
+  .now-playing-inner {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  #albumart {
+    width: 64px;
+    height: 64px;
+    border-radius: 4px;
+    object-fit: cover;
+    background: var(--border);
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+    display: none;
+  }
+  #albumart.visible { display: block; }
+  .now-playing-text { flex: 1; min-width: 0; }
   #mode-label {
     font-size: 11px;
     letter-spacing: 3px;
@@ -275,12 +292,17 @@
 <!-- Now Playing -->
 <div class="card">
   <div class="card-title">Now Playing</div>
-  <div id="mode-label">—</div>
-  <div id="station">—</div>
-  <div id="track">—</div>
-  <div class="meta-row">
-    <span id="bitrate">—</span>
-    <span id="volume-label">Vol: —</span>
+  <div class="now-playing-inner">
+    <img id="albumart" src="" alt="Album Art" onerror="this.classList.remove('visible')">
+    <div class="now-playing-text">
+      <div id="mode-label">—</div>
+      <div id="station">—</div>
+      <div id="track">—</div>
+      <div class="meta-row">
+        <span id="bitrate">—</span>
+        <span id="volume-label">Vol: —</span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -312,12 +334,14 @@
 <div class="card">
   <div class="card-title">Source</div>
   <div class="btn-row">
-    <button class="mode-btn" id="mode-0" onclick="switchMode(0)">INET</button>
-    <button class="mode-btn" id="mode-2" onclick="switchMode(2)">FM</button>
-    <button class="mode-btn" id="mode-3" onclick="switchMode(3)">DAB</button>
-    <button class="mode-btn" id="mode-4" onclick="switchMode(4)">BT</button>
-    <button class="mode-btn" id="mode-5" onclick="switchMode(5)">AUX</button>
+    <button class="mode-btn" id="mode-0" onclick="switchMode(0)" title="Internet Radio — navigates to station menu">INET</button>
+    <button class="mode-btn" id="mode-1" onclick="switchMode(1)" title="Internet Radio (alt)">INET2</button>
+    <button class="mode-btn" id="mode-2" onclick="switchMode(2)" title="FM — menu ID unknown on this firmware">FM</button>
+    <button class="mode-btn" id="mode-3" onclick="switchMode(3)" title="DAB+ — menu ID unknown on this firmware">DAB</button>
+    <button class="mode-btn" id="mode-4" onclick="switchMode(4)" title="Bluetooth — menu ID unknown on this firmware">BT</button>
+    <button class="mode-btn" id="mode-5" onclick="switchMode(5)" title="AUX — menu ID unknown on this firmware">AUX</button>
   </div>
+  <div id="source-note" style="margin-top:6px;font-size:11px;color:var(--dim);display:none"></div>
 </div>
 
 <!-- Station Browser -->
@@ -440,6 +464,7 @@
         setConnState(true, 'Connected to ' + ip);
         if (r.status && Object.keys(r.status).length) updateUI(r.status);
         loadHotkeys();
+        startArtRefresh();
       } else {
         setConnState(false, r.error || 'Failed');
       }
@@ -481,12 +506,62 @@
     try {
       const r = await post('/api/command', { command, ...extras });
       if (r.raw) log('CMD ' + command + ' → ' + prettyXml(r.raw));
+      else if (r.note) log('CMD ' + command + ' → ' + r.note);
       else if (r.error) log('ERROR: ' + r.error);
     } catch(e) { log('Error: ' + e.message); }
   }
 
-  function switchMode(n) { cmd('SwitchMode', { Mode: n }); }
-  function preset(n)      { cmd('PlayFavorite', { Index: n }); }
+  async function switchMode(n) {
+    const noteEl = document.getElementById('source-note');
+    noteEl.style.display = 'none';
+    try {
+      const r = await post('/api/command', { command: 'SwitchMode', Mode: n });
+      if (r.ok) {
+        if (r.note) {
+          noteEl.textContent = r.note;
+          noteEl.style.display = 'block';
+        }
+        if (r.raw) log('SwitchMode → ' + prettyXml(r.raw));
+      } else {
+        const msg = r.error || r.hint || 'Source switching not supported on this firmware';
+        noteEl.textContent = msg;
+        noteEl.style.display = 'block';
+        log('SwitchMode mode=' + n + ': ' + msg);
+      }
+    } catch(e) { log('Error: ' + e.message); }
+  }
+
+  function preset(n) { cmd('PlayFavorite', { Index: n }); }
+
+  // ── Album Art ──────────────────────────────────────────────────────────────
+  let lastArtHash = null;
+  let artRefreshTimer = null;
+
+  function refreshAlbumArt() {
+    const img = document.getElementById('albumart');
+    const url = '/api/albumart?t=' + Date.now(); // cache-bust
+    const tmp = new Image();
+    tmp.onload = () => {
+      img.src = url;
+      img.classList.add('visible');
+    };
+    tmp.onerror = () => {
+      img.classList.remove('visible');
+    };
+    tmp.src = url;
+  }
+
+  function startArtRefresh() {
+    if (artRefreshTimer) clearInterval(artRefreshTimer);
+    refreshAlbumArt();
+    artRefreshTimer = setInterval(refreshAlbumArt, 5000);
+  }
+
+  function stopArtRefresh() {
+    if (artRefreshTimer) { clearInterval(artRefreshTimer); artRefreshTimer = null; }
+    const img = document.getElementById('albumart');
+    img.classList.remove('visible');
+  }
 
   // ── Station Browser ────────────────────────────────────────────────────────
   function toggleBrowser() {
@@ -582,7 +657,10 @@
     try {
       const r = await post('/api/command', { command: 'PlayStation', id, name });
       if (r.error) log('ERROR: ' + r.error);
-      else log('Playing: ' + name + ' (' + id + ')');
+      else {
+        log('Playing: ' + name + ' (' + id + ')');
+        setTimeout(refreshAlbumArt, 2000); // art changes after a few seconds
+      }
     } catch(e) { log('Error: ' + e.message); }
   }
 
@@ -604,6 +682,7 @@
         .forEach(id => setText(id, '—'));
       document.getElementById('vol-bar').style.width = '0%';
       document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+      stopArtRefresh();
     }
   }
 

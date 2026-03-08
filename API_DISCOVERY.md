@@ -183,6 +183,22 @@ GET /play_url?id=87_3
 
 ---
 
+### `GET /switchMode?mode={N}`
+**Цел:** Смяна на source (INET/FM/DAB/BT/AUX)  
+**Работи:** ❌ НЕ РАБОТИ — връща `NO_SUPPORT`  
+
+**Отговор:**
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<result>
+  <rt>NO_SUPPORT</rt>
+</result>
+```
+
+**Заобикаляне:** За Internet Radio се ползва `/gochild?id=87` (навигация в менюто). За FM/DAB/BT/AUX — menu ID-тата не са открити.
+
+---
+
 ### `GET /setfav?id={menuId}&item={N}&favpos={pos}`
 **Цел:** Добавя/задава любима станция на определена позиция  
 **Работи:** ❌ Връща FAIL  
@@ -215,8 +231,12 @@ GET http://192.168.11.16:8080/playlogo.jpg
 
 **Бележки:**
 - Различен порт — **8080**, не 80
-- Изображение в JPEG формат
-- Сменя се при смяна на станция
+- Изображение в JPEG формат — директно достъпно
+- **Сменя се при смяна на станция** → ползва се за change detection!
+  - Хеш на изображението се проверява на всеки POLL_INTERVAL
+  - Ако хешът се смени → станцията е сменена (работи без `/playinfo`)
+- Нашият сървър го проксира на `/api/albumart` (заобикаля CORS, добавя auth)
+- UI го показва в Now Playing секцията, опреснява на всеки 5 сек
 
 ---
 
@@ -318,10 +338,13 @@ Connected to radio at 192.168.11.16 — firmware j32720190327h
 | Endpoint | Въпрос |
 |----------|--------|
 | `/back_stop` | Спира ли реално възпроизвеждането или е само device-info? Безопасно ли е да се извиква? |
-| `/switchMode` | Работи ли? Какви са валидните mode стойности за тази firmware? |
+| `/switchMode` | ❌ ПОТВЪРДЕНО: НЕ работи → `NO_SUPPORT`. Алтернативата е навигация с `/gochild` |
 | `/playControl` | Работи ли play/pause? |
 | `/getvol` | Съществува ли read-only endpoint за текущия volume? |
 | Root menu ID | Кое е root menu ID (`/list?id=?`) за пълно браузване на всички категории? |
+| FM menu ID | Кое е menu ID за FM (аналог на `87` за Internet Radio)? |
+| DAB menu ID | Кое е menu ID за DAB+? |
+| BT menu ID | Кое е menu ID за Bluetooth? |
 
 ### Приоритет 2 — Важно
 
@@ -420,7 +443,9 @@ Header:  Authorization: Basic c3UzZzRnbzZzazc6amkzOTQ1NHh1L14=
 | `cur_play_name` не идва от `/init` | Обновява се при PlayFavorite/PlayStation команди |
 | Начален volume неизвестен | Показва `—` докато потребителят не натисне VOL +/- |
 | `/setfav` → FAIL | Добавянето на любими не работи |
+| `/switchMode` → `NO_SUPPORT` | За INET: навигация с `/gochild?id=87`; FM/DAB/BT/AUX menu ID-та не са открити |
 | Root menu ID неизвестен | Browser зарежда от `cur_play_menu_id` или се опитва с id=0 |
+| Album art е на порт 8080 | Проксирано чрез `/api/albumart`; ползва се и за station-change detection |
 
 ---
 
@@ -450,3 +475,4 @@ Invoke-WebRequest -Uri "http://192.168.11.16/getvol" -Headers @{ Authorization =
 ---
 
 *Последна актуализация: 2026-03-08 — базирана на HAR capture `192.168.11.16_2026_03_08_16_06_24.har` и session log файлове [292]-[322]*
+ Root menu ID и FM/DAB menu ID-та — без тях смяната на source не е възможна. Добрият начин е да логнеш още HAR сесии докато навигираш в Android приложението между FM/DAB/INET.
