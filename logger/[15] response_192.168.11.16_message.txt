@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Server: magic iradio
+Content-Type: text/xml
+Content-Length: 169
+
+<?xml version="1.0" encoding="UTF-8"?><result><vol>3</vol><mute>0</mute><Signal>0</Signal><Sound>MONO</Sound><Search>FALSE</Search><Freq>89.50</Freq><RDS></RDS></result>
