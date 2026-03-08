@@ -53,9 +53,12 @@ def send_to_radio(xml: str) -> Optional[str]:
         resp = requests.post(
             f"http://{ip}:{RADIO_XML_PORT}",
             data=xml.encode("utf-8"),
-            headers={"Content-Type": "text/xml; charset=utf-8"},
+            headers={"Content-Type": "text/xml; charset=utf-8", "Connection": "close"},
             timeout=3,
         )
+        if not resp.ok:
+            log.warning("Radio returned HTTP %s: %.200s", resp.status_code, resp.text)
+            return None
         return resp.text
     except requests.RequestException as e:
         log.warning("Radio HTTP error: %s", e)
@@ -79,6 +82,16 @@ def parse_status(xml_text: str) -> dict:
 
 # ── Background Status Poller ───────────────────────────────────────────────────
 
+def _radio_reachable(ip: str) -> bool:
+    """Return True if the radio's XML port is reachable via TCP."""
+    try:
+        with socket.create_connection((ip, RADIO_XML_PORT), timeout=2) as s:
+            pass
+        return True
+    except OSError:
+        return False
+
+
 def status_poller():
     while True:
         if state["connected"] and state["ip"]:
@@ -88,8 +101,14 @@ def status_poller():
                 state["last_status"] = status
                 socketio.emit("status", status)
             else:
-                state["connected"] = False
-                socketio.emit("disconnected", {})
+                # GetStatus failed (e.g. radio returned 501).  Fall back to a
+                # plain TCP reachability check before declaring disconnection so
+                # that radios that don't implement GetStatus stay "connected".
+                if not _radio_reachable(state["ip"]):
+                    state["connected"] = False
+                    socketio.emit("disconnected", {})
+                else:
+                    log.debug("GetStatus failed for %s but radio is still reachable", state["ip"])
         time.sleep(POLL_INTERVAL)
 
 
@@ -112,7 +131,13 @@ def api_connect():
 
     resp = post_to_radio(build_xml("GetStatus"))
     if resp is None:
-        return jsonify(error=f"No response from {ip}:{RADIO_XML_PORT}"), 502
+        # GetStatus may return a non-2xx code (e.g. 501) on some firmware.
+        # Fall back to a plain TCP check so we still connect if the port is open.
+        if not _radio_reachable(ip):
+            return jsonify(error=f"No response from {ip}:{RADIO_XML_PORT}"), 502
+        state["connected"] = True
+        log.info("Connected to radio at %s (GetStatus not supported)", ip)
+        return jsonify(ok=True, status={})
 
     status = parse_status(resp)
     state["connected"] = True
