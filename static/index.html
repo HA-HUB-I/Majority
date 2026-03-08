@@ -280,7 +280,7 @@
 <!-- Presets -->
 <div class="card">
   <div class="card-title">Presets</div>
-  <div class="btn-row">
+  <div id="presets-row" class="btn-row">
     <button class="preset-btn" onclick="preset(1)">1</button>
     <button class="preset-btn" onclick="preset(2)">2</button>
     <button class="preset-btn" onclick="preset(3)">3</button>
@@ -346,10 +346,29 @@
       if (r.ok) {
         setConnState(true, 'Connected to ' + ip);
         updateUI(r.status);
+        loadHotkeys();
       } else {
         setConnState(false, r.error || 'Failed');
       }
     } catch(e) { setConnState(false, 'Error: ' + e.message); }
+  }
+
+  async function loadHotkeys() {
+    try {
+      const r = await fetch('/api/hotkeys');
+      const hotkeys = await r.json();
+      const row = document.getElementById('presets-row');
+      if (!hotkeys || !hotkeys.length) return;
+      row.innerHTML = '';
+      hotkeys.forEach((hk, i) => {
+        const btn = document.createElement('button');
+        btn.className = 'preset-btn';
+        btn.title = hk.name;
+        btn.textContent = hk.name ? hk.name.substring(0, 8) : (i + 1);
+        btn.onclick = () => preset(i + 1);
+        row.appendChild(btn);
+      });
+    } catch(e) { log('Hotkeys load error: ' + e.message); }
   }
 
   async function scan() {

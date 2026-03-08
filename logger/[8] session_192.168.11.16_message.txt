@@ -1,0 +1,15 @@
+GET /list?id=1&start=1&count=15 HTTP/1.1
+Authorization: Basic c3UzZzRnbzZzazc6amkzOTQ1NHh1L14=
+User-Agent: Dalvik/2.1.0 (Linux; U; Android 16; 2412DPC0AG Build/BP2A.250605.031.A3)
+Host: 192.168.11.16
+Connection: Keep-Alive
+Accept-Encoding: gzip
+
+
+
+HTTP/1.1 200 OK
+Server: magic iradio
+Content-Type: text/xml
+Content-Length: 890
+
+<?xml version="1.0" encoding="UTF-8"?><menu><item_total>11</item_total><item_return>11</item_return><item><id>87</id><status>content</status><name>Local Radio</name></item><item><id>51</id><status>content</status><name>my mediaU</name></item><item><id>52</id><status>content</status><name>Internet Radio</name></item><item><id>2</id><status>content</status><name>Media Center</name></item><item><id>5</id><status>content</status><name>FM</name></item><item><id>91</id><status>content</status><name>DAB/DAB+</name></item><item><id>136</id><status>content</status><name>Spotify Connect</name></item><item><id>3</id><status>content</status><name>Information Center</name></item><item><id>47</id><status>content</status><name>AUX</name></item><item><id>104</id><status>content</status><name>Bluetooth</name></item><item><id>6</id><status>content</status><name>Configuration</name></item></menu>
