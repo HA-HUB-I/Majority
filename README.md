@@ -2,6 +2,11 @@
 
 Browser-based remote control for **Majority Pembroke** internet radio using the Magic iRadio XML REST API (port 80).
 
+## Preview screenshot
+
+![Web Server](/images/web.png)
+![Windows Taskbar App](/images/taskbar_control.png)
+
 ## Requirements
 
 - Python 3.8+
